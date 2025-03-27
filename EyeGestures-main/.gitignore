@@ -1,0 +1,12 @@
+build
+recording/*
+dataSetPreparing/*
+pyYTdownload.py
+*.pyc
+__pycache__/*
+dist/*
+venv
+*.pyc
+dist/*
+*.csv
+data/*
