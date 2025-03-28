@@ -113,6 +113,170 @@ GAZE_V_THRESHOLD_UP = 0.010  # Upward threshold
 GAZE_V_THRESHOLD_DOWN = 0.002  # Downward threshold
 VERTICAL_BIAS = 0.015  # Vertical bias
 
+# Add these with other calibration settings
+# Sector-based calibration
+USE_SECTOR_CALIBRATION = True  # Whether to use sector-specific calibration
+SCREEN_SECTORS = [
+    "TopLeft", "TopCenter", "TopRight",
+    "MiddleLeft", "Center", "MiddleRight",
+    "BottomLeft", "BottomCenter", "BottomRight"
+]  # 3x3 grid sectors matching our calibration positions
+SECTOR_CALIBRATION_DATA = {}  # Will store sector-specific calibration data
+
+def initialize_sector_calibration():
+    """Initialize sector-specific calibration data structure"""
+    global SECTOR_CALIBRATION_DATA
+    
+    # Create empty data structure for each sector
+    for sector in SCREEN_SECTORS:
+        SECTOR_CALIBRATION_DATA[sector] = {
+            'reference_iris_x': 0.0,  # Reference iris position when looking at this sector
+            'reference_iris_y': 0.0,
+            'h_threshold': GAZE_H_THRESHOLD,  # Start with global defaults
+            'v_threshold_up': GAZE_V_THRESHOLD_UP,
+            'v_threshold_down': GAZE_V_THRESHOLD_DOWN,
+            'vertical_bias': VERTICAL_BIAS,
+            'samples_count': 0  # Number of samples collected for this sector
+        }
+    
+    print("Initialized sector-based calibration data structure")
+
+# Add these functions after the initialize_sector_calibration function
+
+def determine_current_sector(iris_x, iris_y):
+    """Determine which screen sector the current gaze is in based on iris position"""
+    # Define sector boundaries based on iris position ranges
+    # These boundaries are approximate and will need tuning
+    if iris_x < -0.02:  # Left side
+        if iris_y < -0.02:  # Top
+            return "TopLeft"
+        elif iris_y > 0.02:  # Bottom
+            return "BottomLeft"
+        else:  # Middle
+            return "MiddleLeft"
+    elif iris_x > 0.02:  # Right side
+        if iris_y < -0.02:  # Top
+            return "TopRight"
+        elif iris_y > 0.02:  # Bottom
+            return "BottomRight"
+        else:  # Middle
+            return "MiddleRight"
+    else:  # Center column
+        if iris_y < -0.02:  # Top
+            return "TopCenter"
+        elif iris_y > 0.02:  # Bottom
+            return "BottomCenter"
+        else:  # Middle
+            return "Center"
+
+def get_gaze_direction(left_iris_normalized, right_iris_normalized):
+    """Calculate the gaze direction based on iris positions"""
+    global GAZE_HISTORY, KALMAN_FILTER_X, KALMAN_FILTER_Y, USE_KALMAN_FILTER, SECTOR_CALIBRATION_DATA
+
+    # Average the normalized positions from both eyes
+    avg_iris_x = (left_iris_normalized[0] + right_iris_normalized[0]) / 2
+    avg_iris_y = (left_iris_normalized[1] + right_iris_normalized[1]) / 2
+    
+    # Apply Kalman filtering if enabled
+    if USE_KALMAN_FILTER and KALMAN_FILTER_X is not None and KALMAN_FILTER_Y is not None:
+        filtered_x, _ = KALMAN_FILTER_X.update(avg_iris_x)
+        filtered_y, _ = KALMAN_FILTER_Y.update(avg_iris_y)
+        avg_iris_x = filtered_x
+        avg_iris_y = filtered_y
+
+    # Determine which sector the gaze is currently in
+    current_sector = determine_current_sector(avg_iris_x, avg_iris_y)
+    
+    # Use sector-specific calibration if enabled and available for current sector
+    if USE_SECTOR_CALIBRATION and current_sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] > 5:
+        # Get sector-specific reference positions and thresholds
+        ref_x = SECTOR_CALIBRATION_DATA[current_sector]['reference_iris_x']
+        ref_y = SECTOR_CALIBRATION_DATA[current_sector]['reference_iris_y']
+        h_threshold = SECTOR_CALIBRATION_DATA[current_sector]['h_threshold']
+        v_threshold_up = SECTOR_CALIBRATION_DATA[current_sector]['v_threshold_up']
+        v_threshold_down = SECTOR_CALIBRATION_DATA[current_sector]['v_threshold_down']
+        vertical_bias = SECTOR_CALIBRATION_DATA[current_sector]['vertical_bias']
+        
+        # Calculate horizontal gaze based on sector-specific reference
+        h_offset = avg_iris_x - ref_x
+        
+        if h_offset < -h_threshold:
+            h_direction = "Left"
+        elif h_offset > h_threshold:
+            h_direction = "Right"
+        else:
+            h_direction = "Center"
+        
+        # Calculate vertical gaze with sector-specific bias
+        if USE_ALTERNATIVE_METHOD:
+            # Use alternative method with sector-specific vertical bias
+            vertical_position = avg_iris_y + vertical_bias
+        else:
+            # Use standard method with sector-specific vertical bias
+            vertical_position = avg_iris_y + vertical_bias
+        
+        if vertical_position < -v_threshold_up:
+            v_direction = "Up"
+        elif vertical_position > v_threshold_down:
+            v_direction = "Down"
+        else:
+            v_direction = "Center"
+            
+        if DEBUG_MODE:
+            print(f"Using sector {current_sector} calibration - h_thresh: {h_threshold:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}, bias: {vertical_bias:.4f}")
+    else:
+        # Use global calibration values
+        if USE_ALTERNATIVE_METHOD:
+            vertical_position = avg_iris_y + VERTICAL_BIAS
+        else:
+            vertical_position = avg_iris_y + VERTICAL_BIAS
+            
+        if avg_iris_x < -GAZE_H_THRESHOLD:
+            h_direction = "Left"
+        elif avg_iris_x > GAZE_H_THRESHOLD:
+            h_direction = "Right"
+        else:
+            h_direction = "Center"
+        
+        if vertical_position < -GAZE_V_THRESHOLD_UP:
+            v_direction = "Up"
+        elif vertical_position > GAZE_V_THRESHOLD_DOWN:
+            v_direction = "Down"
+        else:
+            v_direction = "Center"
+            
+        if DEBUG_MODE and USE_SECTOR_CALIBRATION:
+            if current_sector not in SECTOR_CALIBRATION_DATA:
+                print(f"Sector {current_sector} not found in calibration data")
+            elif SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] <= 5:
+                print(f"Sector {current_sector} has insufficient samples: {SECTOR_CALIBRATION_DATA[current_sector]['samples_count']}")
+            
+    # Combine horizontal and vertical directions
+    if h_direction == "Center" and v_direction == "Center":
+        direction = "Center"
+    else:
+        if h_direction == "Center":
+            direction = v_direction
+        elif v_direction == "Center":
+            direction = h_direction
+        else:
+            direction = f"{h_direction}-{v_direction}"
+    
+    # Store the current gaze direction in history for smoothing
+    GAZE_HISTORY.append({
+        'direction': direction,
+        'position': (avg_iris_x, avg_iris_y),
+        'sector': current_sector,
+        'timestamp': time.time()
+    })
+    
+    # Limit history length
+    if len(GAZE_HISTORY) > GAZE_HISTORY_LENGTH:
+        GAZE_HISTORY.pop(0)
+    
+    # Return smoothed gaze direction to reduce flickering
+    return smooth_gaze_direction()
+
 # Functions for calibration
 
 def start_calibration():
@@ -133,6 +297,7 @@ def start_calibration():
 def collect_calibration_sample(iris_x, iris_y):
     """Collect a sample during calibration"""
     global CALIBRATION_SAMPLES, CURRENT_CALIBRATION_POS, CALIBRATION_STATE, CALIBRATION_POSITION_START_TIME
+    global SECTOR_CALIBRATION_DATA
     
     # Skip if we're still in warmup phase or not in sampling state
     if CALIBRATION_STATE != "SAMPLING":
@@ -145,6 +310,27 @@ def collect_calibration_sample(iris_x, iris_y):
     CALIBRATION_SAMPLES[current_pos]['x'].append(iris_x)
     CALIBRATION_SAMPLES[current_pos]['y'].append(iris_y)
     CALIBRATION_SAMPLES[current_pos]['timestamps'].append(current_time)
+    
+    # Update sector-specific calibration data - current_pos is also a sector name in our 3x3 grid
+    if USE_SECTOR_CALIBRATION and current_pos in SECTOR_CALIBRATION_DATA:
+        # Update reference iris position as a running average
+        sector_data = SECTOR_CALIBRATION_DATA[current_pos]
+        count = sector_data['samples_count']
+        
+        if count == 0:
+            # First sample for this sector
+            sector_data['reference_iris_x'] = iris_x
+            sector_data['reference_iris_y'] = iris_y
+        else:
+            # Update running average
+            weight = min(0.1, 1.0 / (count + 1))  # Lower weight for later samples
+            sector_data['reference_iris_x'] = ((1 - weight) * sector_data['reference_iris_x'] + 
+                                              weight * iris_x)
+            sector_data['reference_iris_y'] = ((1 - weight) * sector_data['reference_iris_y'] + 
+                                              weight * iris_y)
+        
+        # Increment sample count
+        sector_data['samples_count'] += 1
 
 def move_to_next_calibration_position():
     """Move to the next position in the calibration sequence"""
@@ -162,6 +348,7 @@ def move_to_next_calibration_position():
 def calculate_calibration_values():
     """Calculate calibration values from collected samples"""
     global CALIBRATION_DATA, GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS
+    global SECTOR_CALIBRATION_DATA
     
     # Save previous calibration values to allow for weighted averaging
     prev_h_threshold = GAZE_H_THRESHOLD
@@ -420,6 +607,99 @@ def calculate_calibration_values():
         if down_points:
             midpoints["down"] = sum(down_points) / len(down_points)
     
+    # Calculate sector-specific thresholds if enabled
+    if USE_SECTOR_CALIBRATION:
+        # For each sector, calculate local thresholds based on differences with neighboring sectors
+        for i, sector in enumerate(SCREEN_SECTORS):
+            # Skip if we don't have samples for this sector
+            if sector not in averages:
+                continue
+                
+            # Get sector position in grid (0-2 for rows, 0-2 for cols)
+            row = i // 3
+            col = i % 3
+            
+            # Find neighboring sectors for threshold calculation
+            neighbors = []
+            
+            # Left neighbor
+            if col > 0:
+                left_sector = SCREEN_SECTORS[i - 1]
+                if left_sector in averages:
+                    neighbors.append(left_sector)
+            
+            # Right neighbor
+            if col < 2:
+                right_sector = SCREEN_SECTORS[i + 1]
+                if right_sector in averages:
+                    neighbors.append(right_sector)
+            
+            # Top neighbor
+            if row > 0:
+                top_sector = SCREEN_SECTORS[i - 3]
+                if top_sector in averages:
+                    neighbors.append(top_sector)
+            
+            # Bottom neighbor
+            if row < 2:
+                bottom_sector = SCREEN_SECTORS[i + 3]
+                if bottom_sector in averages:
+                    neighbors.append(bottom_sector)
+            
+            # Calculate local thresholds based on differences with neighbors
+            sector_h_thresholds = []
+            sector_v_up_thresholds = []
+            sector_v_down_thresholds = []
+            
+            for neighbor in neighbors:
+                # Skip if we don't have samples for neighbor
+                if neighbor not in averages:
+                    continue
+                
+                # Calculate horizontal difference
+                h_diff = abs(averages[sector]['x'] - averages[neighbor]['x'])
+                if h_diff > 0.001:  # Avoid tiny values
+                    sector_h_thresholds.append(h_diff * 0.6)  # 60% of difference as threshold
+                
+                # Calculate vertical difference
+                v_diff = averages[sector]['y'] - averages[neighbor]['y']
+                if v_diff < -0.001:  # Neighbor is below this sector
+                    sector_v_down_thresholds.append(abs(v_diff) * 0.6)
+                elif v_diff > 0.001:  # Neighbor is above this sector
+                    sector_v_up_thresholds.append(abs(v_diff) * 0.6)
+            
+            # Calculate sector-specific thresholds as average of neighbor differences
+            if sector_h_thresholds:
+                SECTOR_CALIBRATION_DATA[sector]['h_threshold'] = max(0.003, sum(sector_h_thresholds) / len(sector_h_thresholds))
+            else:
+                # Fallback to global threshold
+                SECTOR_CALIBRATION_DATA[sector]['h_threshold'] = GAZE_H_THRESHOLD
+            
+            if sector_v_up_thresholds:
+                SECTOR_CALIBRATION_DATA[sector]['v_threshold_up'] = max(0.003, sum(sector_v_up_thresholds) / len(sector_v_up_thresholds))
+            else:
+                # Fallback to global threshold
+                SECTOR_CALIBRATION_DATA[sector]['v_threshold_up'] = GAZE_V_THRESHOLD_UP
+            
+            if sector_v_down_thresholds:
+                SECTOR_CALIBRATION_DATA[sector]['v_threshold_down'] = max(0.002, sum(sector_v_down_thresholds) / len(sector_v_down_thresholds))
+            else:
+                # Fallback to global threshold
+                SECTOR_CALIBRATION_DATA[sector]['v_threshold_down'] = GAZE_V_THRESHOLD_DOWN
+            
+            # Calculate sector-specific vertical bias
+            # For each sector, bias should be the offset needed to make the reference position "centered"
+            SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.8
+        
+        # Debug output for sector-specific calibration
+        print("\nSector-specific calibration values:")
+        for sector in SCREEN_SECTORS:
+            if sector in averages:
+                print(f"  {sector}: H={SECTOR_CALIBRATION_DATA[sector]['h_threshold']:.4f}, " +
+                      f"V-Up={SECTOR_CALIBRATION_DATA[sector]['v_threshold_up']:.4f}, " +
+                      f"V-Down={SECTOR_CALIBRATION_DATA[sector]['v_threshold_down']:.4f}, " +
+                      f"Bias={SECTOR_CALIBRATION_DATA[sector]['vertical_bias']:.4f}")
+    
     # Store all calculated values
     CALIBRATION_DATA = {
         'h_threshold': GAZE_H_THRESHOLD,
@@ -429,7 +709,9 @@ def calculate_calibration_values():
         'use_alternative_method': USE_ALTERNATIVE_METHOD,
         'averages': averages,
         'expected_positions': expected_positions,
-        'midpoints': midpoints
+        'midpoints': midpoints,
+        'use_sector_calibration': USE_SECTOR_CALIBRATION,
+        'sector_data': SECTOR_CALIBRATION_DATA if USE_SECTOR_CALIBRATION else {}
     }
     
     print("Calibration values calculated:")
@@ -569,50 +851,109 @@ def complete_calibration():
     print("Calibration complete and settings saved!")
 
 def save_config():
-    """Save the calibration data to a config file"""
+    """Save the current configuration to a JSON file"""
+    global CALIBRATION_DATA, GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS
+    global USE_ALTERNATIVE_METHOD, USE_SECTOR_CALIBRATION, SECTOR_CALIBRATION_DATA
+    
+    # Prepare configuration data
     config = {
         'h_threshold': GAZE_H_THRESHOLD,
         'v_threshold_up': GAZE_V_THRESHOLD_UP,
         'v_threshold_down': GAZE_V_THRESHOLD_DOWN,
         'vertical_bias': VERTICAL_BIAS,
         'use_alternative_method': USE_ALTERNATIVE_METHOD,
-        'calibration_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        'timestamp': time.time(),
+        'use_sector_calibration': USE_SECTOR_CALIBRATION,
     }
     
-    try:
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(config, f, indent=4)
-        print(f"Configuration saved to {CONFIG_FILE}")
-    except Exception as e:
-        print(f"Error saving config: {e}")
+    # Add sector calibration data if available
+    if USE_SECTOR_CALIBRATION:
+        # Convert sector data to a format that can be JSON serialized
+        sector_data = {}
+        for sector, data in SECTOR_CALIBRATION_DATA.items():
+            sector_data[sector] = {
+                'reference_iris_x': float(data['reference_iris_x']),
+                'reference_iris_y': float(data['reference_iris_y']),
+                'h_threshold': float(data['h_threshold']),
+                'v_threshold_up': float(data['v_threshold_up']),
+                'v_threshold_down': float(data['v_threshold_down']),
+                'vertical_bias': float(data['vertical_bias']),
+                'samples_count': int(data['samples_count'])
+            }
+        config['sector_data'] = sector_data
+    
+    # Save to file
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+    
+    print(f"Configuration saved to {CONFIG_FILE}")
 
 def load_config():
-    """Load calibration data from config file"""
-    global GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS, USE_ALTERNATIVE_METHOD
+    """Load the configuration from a JSON file"""
+    global CALIBRATION_DATA, GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS
+    global USE_ALTERNATIVE_METHOD, USE_SECTOR_CALIBRATION, SECTOR_CALIBRATION_DATA
     
     try:
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r') as f:
-                config = json.load(f)
-            
-            GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
-            GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
-            GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
-            VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
-            USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
-            
-            print(f"Loaded configuration from {CONFIG_FILE}")
-            print(f"Horizontal threshold: {GAZE_H_THRESHOLD:.4f}")
-            print(f"Upward threshold: {GAZE_V_THRESHOLD_UP:.4f}")
-            print(f"Downward threshold: {GAZE_V_THRESHOLD_DOWN:.4f}")
-            print(f"Vertical bias: {VERTICAL_BIAS:.4f}")
-            print(f"Using {'alternative' if USE_ALTERNATIVE_METHOD else 'standard'} method")
-            
-            return True
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+        
+        # Load basic settings
+        GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
+        GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
+        GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
+        VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
+        USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
+        
+        # Load sector-based calibration if available
+        USE_SECTOR_CALIBRATION = config.get('use_sector_calibration', USE_SECTOR_CALIBRATION)
+        if USE_SECTOR_CALIBRATION and 'sector_data' in config:
+            # Initialize sector calibration if not already done
+            if not SECTOR_CALIBRATION_DATA:
+                initialize_sector_calibration()
+                
+            # Update sector data
+            for sector, data in config['sector_data'].items():
+                if sector in SECTOR_CALIBRATION_DATA:
+                    SECTOR_CALIBRATION_DATA[sector]['reference_iris_x'] = data['reference_iris_x']
+                    SECTOR_CALIBRATION_DATA[sector]['reference_iris_y'] = data['reference_iris_y']
+                    SECTOR_CALIBRATION_DATA[sector]['h_threshold'] = data['h_threshold']
+                    SECTOR_CALIBRATION_DATA[sector]['v_threshold_up'] = data['v_threshold_up']
+                    SECTOR_CALIBRATION_DATA[sector]['v_threshold_down'] = data['v_threshold_down']
+                    SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = data['vertical_bias']
+                    SECTOR_CALIBRATION_DATA[sector]['samples_count'] = data['samples_count']
+        
+        # Update calibration data for UI consistency
+        CALIBRATION_DATA = {
+            'h_threshold': GAZE_H_THRESHOLD,
+            'v_threshold_up': GAZE_V_THRESHOLD_UP,
+            'v_threshold_down': GAZE_V_THRESHOLD_DOWN,
+            'vertical_bias': VERTICAL_BIAS,
+            'use_alternative_method': USE_ALTERNATIVE_METHOD,
+            'timestamp': config.get('timestamp', time.time()),
+            'use_sector_calibration': USE_SECTOR_CALIBRATION,
+            'sector_data': SECTOR_CALIBRATION_DATA if USE_SECTOR_CALIBRATION else {}
+        }
+        
+        print(f"Configuration loaded from {CONFIG_FILE}")
+        
+        # Print sector information if DEBUG_MODE
+        if DEBUG_MODE and USE_SECTOR_CALIBRATION:
+            print("\nLoaded sector calibration data:")
+            for sector in SCREEN_SECTORS:
+                if sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[sector]['samples_count'] > 0:
+                    data = SECTOR_CALIBRATION_DATA[sector]
+                    print(f"  {sector}: H={data['h_threshold']:.4f}, " +
+                          f"V-Up={data['v_threshold_up']:.4f}, " +
+                          f"V-Down={data['v_threshold_down']:.4f}, " +
+                          f"Bias={data['vertical_bias']:.4f}, " +
+                          f"Samples={data['samples_count']}")
+        
+    except FileNotFoundError:
+        print(f"Configuration file {CONFIG_FILE} not found. Using default settings.")
+    except json.JSONDecodeError:
+        print(f"Error reading configuration file. Using default settings.")
     except Exception as e:
-        print(f"Error loading config: {e}")
-    
-    return False
+        print(f"Error loading configuration: {e}. Using default settings.")
 
 def get_target_position(position, frame_size):
     """Get the x,y coordinates for a target position on the screen
@@ -1459,6 +1800,23 @@ def process_frame(frame):
                 if predicted_gaze_x is not None and predicted_gaze_y is not None:
                     cv2.putText(frame, f"Pred X,Y: {predicted_gaze_x},{predicted_gaze_y}", (10, 270),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                
+                # Add sector information to debug display
+                current_sector = determine_current_sector(iris_rel_x, iris_rel_y)
+                cv2.putText(frame, f"Sector: {current_sector}", (10, 290), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                
+                # Show sector-specific calibration status
+                if USE_SECTOR_CALIBRATION:
+                    if current_sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] > 5:
+                        sector_data = SECTOR_CALIBRATION_DATA[current_sector]
+                        sector_status = f"Sector calib: H={sector_data['h_threshold']:.3f} V↑={sector_data['v_threshold_up']:.3f} V↓={sector_data['v_threshold_down']:.3f}"
+                        cv2.putText(frame, sector_status, (10, 310), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    else:
+                        sector_status = "Sector calib: Not available for this position"
+                        cv2.putText(frame, sector_status, (10, 310), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 1)
             
             # Visualize blink status
             blink_status = "Blinking" if is_blinking else "Eyes Open"
@@ -1543,6 +1901,68 @@ clock = pygame.time.Clock()
 
 # Variables for threshold adjustment
 threshold_adjust_mode = False
+
+# Initialize sector-based calibration if enabled
+if USE_SECTOR_CALIBRATION:
+    initialize_sector_calibration()
+    
+# Try to load configuration from file
+load_config()
+
+print("Eye Tracker starting up...")
+print(f"Calibration mode: {'Enabled' if CALIBRATION_MODE else 'Disabled'}")
+print(f"Sector-based calibration: {'Enabled' if USE_SECTOR_CALIBRATION else 'Disabled'}")
+print(f"Debug mode: {'Enabled' if DEBUG_MODE else 'Disabled'}")
+
+def smooth_gaze_direction():
+    """Apply temporal smoothing to gaze direction to reduce jitter.
+    This counts occurrences of different directions in the history and
+    selects the most frequent one, giving higher weight to recent samples.
+    Also includes sector information for better context-aware smoothing.
+    """
+    global GAZE_HISTORY
+    
+    if not GAZE_HISTORY:
+        return "Center"
+    
+    # Determine current sector from most recent entry
+    current_sector = GAZE_HISTORY[-1]['sector']
+    
+    # Count directions with weighted recency
+    direction_counts = {}
+    total_weight = 0
+    
+    # Count direction occurrences with recency weighting
+    for i, entry in enumerate(GAZE_HISTORY):
+        # Weight by recency (more recent entries get higher weight)
+        recency_weight = (i + 1) / len(GAZE_HISTORY)
+        
+        # Weight by sector similarity (same sector gets higher weight)
+        sector_weight = 1.5 if entry['sector'] == current_sector else 1.0
+        
+        # Apply combined weight
+        weight = recency_weight * sector_weight
+        
+        # Add to direction count
+        direction = entry['direction']
+        if direction not in direction_counts:
+            direction_counts[direction] = 0
+        direction_counts[direction] += weight
+        total_weight += weight
+    
+    # Find the most common direction
+    most_common_direction = max(direction_counts.items(), key=lambda x: x[1])[0]
+    
+    # Don't override the current detection if it's the same as the most recent one
+    current_direction = GAZE_HISTORY[-1]['direction']
+    most_recent_confidence = direction_counts[current_direction] / total_weight
+    most_common_confidence = direction_counts[most_common_direction] / total_weight
+    
+    # Use most recent detection if it's at least 80% as confident as the most common
+    if current_direction != most_common_direction and most_recent_confidence >= 0.8 * most_common_confidence:
+        return current_direction
+    
+    return most_common_direction
 
 while running:
     # Handle events
@@ -1686,6 +2106,13 @@ while running:
                 else:
                     smoothing_factor = 0.15
                     print("Low-pass filter parameters reset to defaults")
+            
+            # Find the event.key handling section starting with "if event.type == pygame.KEYDOWN:" and add this new case
+            if event.key == pygame.K_x:  # Toggle sector-based calibration
+                USE_SECTOR_CALIBRATION = not USE_SECTOR_CALIBRATION
+                if USE_SECTOR_CALIBRATION and not SECTOR_CALIBRATION_DATA:
+                    initialize_sector_calibration()
+                print(f"Sector-based calibration: {'ON' if USE_SECTOR_CALIBRATION else 'OFF'}")
     
     # Capture frame
     success, img = cap.read()
@@ -1709,7 +2136,7 @@ while running:
     screen.blit(pygame_surface, (0, 0))
     
     # Add help text at the bottom
-    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter", True, (255, 255, 255))
+    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors", True, (255, 255, 255))
     screen.blit(help_text, (10, display_height - 30))
     
     # Add a second line of help text for filtering options
