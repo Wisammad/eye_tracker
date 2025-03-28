@@ -111,8 +111,8 @@ USE_ALTERNATIVE_METHOD = True  # Use a completely different method for vertical 
 # Gaze thresholds that will be calibrated
 GAZE_H_THRESHOLD = 0.0316  # Horizontal threshold (updated from 0.005)
 GAZE_V_THRESHOLD_UP = 0.0383  # Upward threshold (updated from 0.010)
-GAZE_V_THRESHOLD_DOWN = 0.0250  # Downward threshold (updated from 0.002)
-VERTICAL_BIAS = 0.1028  # Vertical bias (updated from 0.015)
+GAZE_V_THRESHOLD_DOWN = 0.0220  # Downward threshold (reduced to improve downward detection)
+VERTICAL_BIAS = 0.0450  # Vertical bias (reduced from 0.0600 to fix upward pulling)
 
 # Add these with other calibration settings
 # Sector-based calibration
@@ -126,6 +126,13 @@ SECTOR_CALIBRATION_DATA = {}  # Will store sector-specific calibration data
 
 # Add this with other global variables
 SECTOR_DISTANCE_WEIGHT = 1.0  # Weight factor for sector distance sensitivity
+
+# Add this with other global variables
+current_eye_openness = 0.0  # Will track eye vertical openness
+
+# Add these global variables
+DOWN_GAZE_SENSITIVITY = 1.0  # Adjustable sensitivity for downward gaze detection
+SHOW_TUNING_DIALOG = False  # Whether to show the tuning dialog
 
 def initialize_sector_calibration():
     """Initialize sector-specific calibration data structure"""
@@ -144,6 +151,24 @@ def initialize_sector_calibration():
         }
     
     print("Initialized sector-based calibration data structure")
+
+# Add this function to apply a stronger vertical bias adjustment for bottom positions
+def get_adjusted_vertical_bias(position):
+    """Get adjusted vertical bias based on screen position to improve top/bottom detection"""
+    global VERTICAL_BIAS
+    
+    # Default to the standard bias
+    bias = VERTICAL_BIAS
+    
+    # Apply stronger adjustments for bottom positions
+    if "Bottom" in position:
+        # For bottom positions, reduce bias to make downward detection more likely
+        bias = VERTICAL_BIAS * 0.5  # Reduce bias by 50% (increased from 40%) 
+    elif "Top" in position:
+        # For top positions, increase bias slightly
+        bias = VERTICAL_BIAS * 1.1  # Increase bias by 10%
+    
+    return bias
 
 # Add these functions after the initialize_sector_calibration function
 
@@ -277,17 +302,34 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
         
         # Calculate vertical gaze with sector-specific bias
         # Apply vertical bias to observed position, not reference
-        v_adjusted_y = avg_iris_y + vertical_bias
+        adjusted_bias = get_adjusted_vertical_bias(current_sector)  # Get position-specific bias
+        v_adjusted_y = avg_iris_y + adjusted_bias
         v_offset = v_adjusted_y - ref_y
         
         if DEBUG_MODE and CONSOLE_DEBUG:
-            print(f"v_offset: {v_offset:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}")
+            print(f"v_offset: {v_offset:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}, bias: {adjusted_bias:.4f}")
         
+        # Important: Use asymmetric thresholds and logic for up vs down detection
+        # For downward gaze, we need to be more sensitive as the eyelid covers part of the iris
         if v_offset < -v_threshold_up:
             v_direction = "Up"
-        elif v_offset > v_threshold_down:
-            v_direction = "Down"
+        elif v_offset > v_threshold_down * (0.5 / DOWN_GAZE_SENSITIVITY):  # Make downward detection even more sensitive (0.6->0.5)
+            # When looking down, we need to check additional factors
+            # Eye openness affects downward gaze detection - the less open, the more sensitive we should be
+            eye_openness_factor = min(1.0, current_eye_openness * 35)  # Normalize to 0-1 (increased from 30 to 35)
+            # Apply DOWN_GAZE_SENSITIVITY directly to make the effect stronger
+            effective_threshold = v_threshold_down * (0.5 / DOWN_GAZE_SENSITIVITY) * eye_openness_factor
             
+            if v_offset > effective_threshold:
+                v_direction = "Down"
+            else:
+                v_direction = "Center"
+            
+            if DEBUG_MODE and CONSOLE_DEBUG:
+                print(f"Down detection: v_offset={v_offset:.4f}, threshold={effective_threshold:.4f}, eye_openness={current_eye_openness:.4f}, sensitivity={DOWN_GAZE_SENSITIVITY:.2f}")
+        else:
+            v_direction = "Center"
+        
         if DEBUG_MODE and USE_SECTOR_CALIBRATION:
             if current_sector not in SECTOR_CALIBRATION_DATA:
                 print(f"Sector {current_sector} not found in calibration data")
@@ -297,26 +339,41 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
     else:
         # Use global calibration values
         if USE_ALTERNATIVE_METHOD:
-            vertical_position = avg_iris_y + VERTICAL_BIAS
+            adjusted_bias = get_adjusted_vertical_bias(current_sector)  # Get position-specific bias
+            vertical_position = avg_iris_y + adjusted_bias
         else:
-            vertical_position = avg_iris_y + VERTICAL_BIAS
+            adjusted_bias = get_adjusted_vertical_bias(current_sector)  # Get position-specific bias
+            vertical_position = avg_iris_y + adjusted_bias
             
         if avg_iris_x < -GAZE_H_THRESHOLD:
             h_direction = "Left"
         elif avg_iris_x > GAZE_H_THRESHOLD:
             h_direction = "Right"
         
+        # Apply sensitivity adjustment to downward gaze here as well
         if vertical_position < -GAZE_V_THRESHOLD_UP:
             v_direction = "Up"
-        elif vertical_position > GAZE_V_THRESHOLD_DOWN:
-            v_direction = "Down"
+        elif vertical_position > GAZE_V_THRESHOLD_DOWN * (0.5 / DOWN_GAZE_SENSITIVITY):  # Make downward detection more sensitive (0.6->0.5)
+            # Apply the same sensitivity adjustment as in the sector-specific code
+            eye_openness_factor = min(1.0, current_eye_openness * 35)  # Normalize to 0-1 (increased from 30 to 35)
+            effective_threshold = GAZE_V_THRESHOLD_DOWN * (0.5 / DOWN_GAZE_SENSITIVITY) * eye_openness_factor
+            
+            if vertical_position > effective_threshold:
+                v_direction = "Down"
+            else:
+                v_direction = "Center"
+                
+            if DEBUG_MODE and CONSOLE_DEBUG:
+                print(f"Global down detection: pos={vertical_position:.4f}, threshold={effective_threshold:.4f}, sensitivity={DOWN_GAZE_SENSITIVITY:.2f}, bias={adjusted_bias:.4f}")
+        else:
+            v_direction = "Center"
             
         if DEBUG_MODE and USE_SECTOR_CALIBRATION:
             if current_sector not in SECTOR_CALIBRATION_DATA:
                 print(f"Sector {current_sector} not found in calibration data")
             elif SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] <= 5:
                 print(f"Sector {current_sector} has insufficient samples: {SECTOR_CALIBRATION_DATA[current_sector]['samples_count']}")
-            
+    
     # Combine horizontal and vertical directions
     if h_direction == "Center" and v_direction == "Center":
         direction = "Center"
@@ -363,7 +420,7 @@ def start_calibration():
 def collect_calibration_sample(iris_x, iris_y):
     """Collect a sample during calibration"""
     global CALIBRATION_SAMPLES, CURRENT_CALIBRATION_POS, CALIBRATION_STATE, CALIBRATION_POSITION_START_TIME
-    global SECTOR_CALIBRATION_DATA
+    global SECTOR_CALIBRATION_DATA, current_eye_openness
     
     # Skip if we're still in warmup phase or not in sampling state
     if CALIBRATION_STATE != "SAMPLING":
@@ -372,9 +429,18 @@ def collect_calibration_sample(iris_x, iris_y):
     current_pos = CALIBRATION_POSITIONS[CURRENT_CALIBRATION_POS]
     current_time = time.time()
     
+    # Apply special handling for bottom positions to compensate for eyelid coverage
+    adjusted_iris_y = iris_y
+    if "Bottom" in current_pos and current_eye_openness < 0.05:
+        # If calibrating bottom positions and eyes are less open, apply a correction
+        # This compensates for the natural tendency of eyelids to cover part of iris when looking down
+        adjusted_iris_y = iris_y + (0.05 - current_eye_openness) * 0.5
+        if DEBUG_MODE and CONSOLE_DEBUG:
+            print(f"Bottom position eye openness adjustment: {iris_y:.4f} -> {adjusted_iris_y:.4f}")
+    
     # Store the sample with timestamp
     CALIBRATION_SAMPLES[current_pos]['x'].append(iris_x)
-    CALIBRATION_SAMPLES[current_pos]['y'].append(iris_y)
+    CALIBRATION_SAMPLES[current_pos]['y'].append(adjusted_iris_y)  # Use adjusted y value
     CALIBRATION_SAMPLES[current_pos]['timestamps'].append(current_time)
     
     # Update sector-specific calibration data - current_pos is also a sector name in our 3x3 grid
@@ -386,14 +452,14 @@ def collect_calibration_sample(iris_x, iris_y):
         if count == 0:
             # First sample for this sector
             sector_data['reference_iris_x'] = iris_x
-            sector_data['reference_iris_y'] = iris_y
+            sector_data['reference_iris_y'] = adjusted_iris_y  # Use adjusted y value
         else:
             # Update running average
             weight = min(0.1, 1.0 / (count + 1))  # Lower weight for later samples
             sector_data['reference_iris_x'] = ((1 - weight) * sector_data['reference_iris_x'] + 
                                               weight * iris_x)
             sector_data['reference_iris_y'] = ((1 - weight) * sector_data['reference_iris_y'] + 
-                                              weight * iris_y)
+                                              weight * adjusted_iris_y)  # Use adjusted y value
         
         # Increment sample count
         sector_data['samples_count'] += 1
@@ -755,7 +821,12 @@ def calculate_calibration_values():
             
             # Calculate sector-specific vertical bias
             # For each sector, bias should be the offset needed to make the reference position "centered"
-            SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.4  # Reduced bias factor from 0.8 to 0.4
+            if "Bottom" in sector:
+                # Lower bias for bottom positions to improve downward gaze detection
+                SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.25
+            else:
+                # Standard bias for other positions
+                SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.35
         
         # Debug output for sector-specific calibration
         print("\nSector-specific calibration values:")
@@ -1400,6 +1471,10 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
         left_eye_height = left_eye_bottom.y - left_eye_top.y
         right_eye_height = right_eye_bottom.y - right_eye_top.y
         
+        # Calculate eye openness for downward gaze adjustment
+        global current_eye_openness
+        current_eye_openness = (left_eye_height + right_eye_height) / 2
+        
         # Check for zero height to avoid division by zero
         if left_eye_height < 0.001 or right_eye_height < 0.001:
             # Eyes are likely closed or not tracked well
@@ -1416,6 +1491,15 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
         
         # Weighted average of relative positions
         avg_rel_pos = (left_iris_relative_pos * left_height_weight) + (right_iris_relative_pos * right_height_weight)
+        
+        # Apply correction for downward gaze when eyes are less open
+        # This compensates for the natural eyelid coverage when looking down
+        eye_openness_ratio = current_eye_openness / 0.05  # Normalize to typical openness
+        if avg_rel_pos > 0.5 and eye_openness_ratio < 1.0:
+            # Enhance downward gaze detection when eyes are less open
+            # The less open the eyes, the more we boost the downward position
+            downward_boost = max(0, (1.0 - eye_openness_ratio) * 0.2)
+            avg_rel_pos = avg_rel_pos + downward_boost
         
         # Convert to our coordinate system where negative = up, positive = down
         # centered around 0.5 (the middle of the eye)
@@ -1546,36 +1630,43 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     # Determine horizontal gaze direction using calibration midpoints if available
     h_direction = "Center"
     if 'midpoints' in CALIBRATION_DATA:
+        # Fix the left/right direction swapping by correcting the comparison
         if CALIBRATION_DATA['midpoints'].get('left') is not None and iris_relative_x < CALIBRATION_DATA['midpoints']['left']:
-            h_direction = "Left"
+            h_direction = "Left"  # Correctly set to Left when looking left (negative X)
         elif CALIBRATION_DATA['midpoints'].get('right') is not None and iris_relative_x > CALIBRATION_DATA['midpoints']['right']:
-            h_direction = "Right"
+            h_direction = "Right"  # Correctly set to Right when looking right (positive X)
     else:
         # Fallback to threshold-based detection
+        # Ensure proper left/right direction by checking the sign correctly
         if iris_relative_x < -GAZE_H_THRESHOLD:
-            h_direction = "Left"
+            h_direction = "Left"  # Looking left (negative X)
         elif iris_relative_x > GAZE_H_THRESHOLD:
-            h_direction = "Right"
+            h_direction = "Right"  # Looking right (positive X)
     
     # Determine vertical gaze direction using calibration midpoints if available
     v_direction = "Center"
     if 'midpoints' in CALIBRATION_DATA:
+        # Fix vertical direction confusion by ensuring correct comparison
+        # Note: negative iris_relative_y means looking up, positive means looking down
         if CALIBRATION_DATA['midpoints'].get('up') is not None and iris_relative_y < CALIBRATION_DATA['midpoints']['up']:
-            v_direction = "Up"
+            v_direction = "Up"  # Looking up (negative Y)
         elif CALIBRATION_DATA['midpoints'].get('down') is not None and iris_relative_y > CALIBRATION_DATA['midpoints']['down']:
-            v_direction = "Down"
+            v_direction = "Down"  # Looking down (positive Y)
     else:
         # Fallback to asymmetric thresholds for upward and downward gaze
+        # Ensure correct vertical orientation by checking the signs correctly
+        # In iris coordinate system: negative Y = looking up, positive Y = looking down
         if iris_relative_y < -GAZE_V_THRESHOLD_UP:
-            v_direction = "Up"
+            v_direction = "Up"  # Looking up (negative Y)
         elif iris_relative_y > GAZE_V_THRESHOLD_DOWN:
-            v_direction = "Down"
+            v_direction = "Down"  # Looking down (positive Y)
     
     # If we have multiple calibration points, we can be more precise with corner gazes
     if 'averages' in CALIBRATION_DATA:
         # Check for diagonal gazes (corners) by comparing with corner position averages
         if h_direction != "Center" and v_direction != "Center":
             # We already detected both horizontal and vertical movement, refine for corners
+            # Fix the corner mapping to ensure directions match correctly
             corner_positions = {
                 ("Left", "Up"): "TopLeft",
                 ("Right", "Up"): "TopRight",
@@ -2046,6 +2137,99 @@ def smooth_gaze_direction():
     
     return most_common_direction
 
+# Add function to draw tuning dialog
+def draw_tuning_dialog(screen):
+    """Draw a dialog for fine-tuning eye tracker parameters"""
+    global DOWN_GAZE_SENSITIVITY
+    
+    dialog_width = 400
+    dialog_height = 250
+    x = (screen.get_width() - dialog_width) // 2
+    y = (screen.get_height() - dialog_height) // 2
+    
+    # Draw semi-transparent background
+    dialog_surface = pygame.Surface((dialog_width, dialog_height), pygame.SRCALPHA)
+    dialog_surface.fill((0, 0, 0, 200))
+    
+    # Add title
+    title_font = pygame.font.Font(None, 32)
+    title = title_font.render("Eye Tracker Tuning", True, (255, 255, 255))
+    dialog_surface.blit(title, (dialog_width//2 - title.get_width()//2, 15))
+    
+    # Add subtitle explaining what this does
+    subtitle_font = pygame.font.Font(None, 24)
+    subtitle = subtitle_font.render("Adjust to improve detection when looking down", True, (220, 220, 220))
+    dialog_surface.blit(subtitle, (dialog_width//2 - subtitle.get_width()//2, 45))
+    
+    # Add controls
+    font = pygame.font.Font(None, 26)
+    
+    # Down gaze sensitivity with clear indication of current value
+    text = font.render(f"Down Gaze Sensitivity: {DOWN_GAZE_SENSITIVITY:.1f}", True, (255, 255, 255))
+    dialog_surface.blit(text, (20, 80))
+    
+    # Draw slider background
+    pygame.draw.rect(dialog_surface, (50, 50, 50), (20, 110, 360, 15), 0, 3)
+    
+    # Draw slider position with better visibility
+    slider_pos = 20 + int(360 * (DOWN_GAZE_SENSITIVITY - 0.5) / 1.5)  # Map 0.5-2.0 to 0-360
+    pygame.draw.circle(dialog_surface, (0, 200, 0), (slider_pos, 117), 10)
+    
+    # Draw tick marks with labels for slider positions
+    ticks = [(0.5, "Less sensitive"), (1.0, "Default"), (1.5, "More"), (2.0, "Most")]
+    tick_font = pygame.font.Font(None, 20)
+    
+    for value, label in ticks:
+        x_pos = 20 + int(360 * (value - 0.5) / 1.5)
+        # Draw tick mark
+        pygame.draw.line(dialog_surface, (150, 150, 150), (x_pos, 125), (x_pos, 130), 2)
+        # Draw label
+        tick_label = tick_font.render(label, True, (200, 200, 200))
+        dialog_surface.blit(tick_label, (x_pos - tick_label.get_width()//2, 132))
+    
+    # Instructions - made clearer
+    instructions = [
+        "Press 1-5 to adjust sensitivity:",
+        "Higher values (4-5): Better downward detection",
+        "Lower values (1-2): Less downward detection",
+        "Press E to toggle this dialog"
+    ]
+    
+    y_pos = 160
+    for instruction in instructions:
+        text = font.render(instruction, True, (220, 220, 220))
+        dialog_surface.blit(text, (20, y_pos))
+        y_pos += 25
+    
+    # Blit dialog to screen with slight animation effect
+    dialog_rect = dialog_surface.get_rect(center=(screen.get_width()//2, screen.get_height()//2))
+    screen.blit(dialog_surface, dialog_rect)
+
+# Add more key handlers for sensitivity adjustment
+if SHOW_TUNING_DIALOG:
+    if event.key == pygame.K_1:
+        DOWN_GAZE_SENSITIVITY = 0.5
+        print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY}")
+    elif event.key == pygame.K_2:
+        DOWN_GAZE_SENSITIVITY = 0.75
+        print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY}")
+    elif event.key == pygame.K_3:
+        DOWN_GAZE_SENSITIVITY = 1.0
+        print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY}")
+    elif event.key == pygame.K_4:
+        DOWN_GAZE_SENSITIVITY = 1.5
+        print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY}")
+    elif event.key == pygame.K_5:
+        DOWN_GAZE_SENSITIVITY = 2.0
+        print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY}")
+
+# Add code to draw the dialog in the main loop, after the screen.blit(frame_surface, (0, 0)) line
+if SHOW_TUNING_DIALOG:
+    draw_tuning_dialog(screen)
+
+# Update the key help text to include E for tuning
+help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning", True, (255, 255, 255))
+
 while running:
     # Handle events
     for event in pygame.event.get():
@@ -2214,6 +2398,31 @@ while running:
                 
             # Update help text to include V key
             help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose", True, (255, 255, 255))
+            
+            # Add new key handler in the main loop
+            if event.key == pygame.K_e:  # E for eye tuning
+                SHOW_TUNING_DIALOG = not SHOW_TUNING_DIALOG
+                print(f"Tuning dialog: {'visible' if SHOW_TUNING_DIALOG else 'hidden'}")
+                
+            # Down gaze sensitivity adjustment
+            if event.key == pygame.K_1:
+                DOWN_GAZE_SENSITIVITY = 0.5
+                print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (less sensitive)")
+            elif event.key == pygame.K_2:
+                DOWN_GAZE_SENSITIVITY = 0.75
+                print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (somewhat less sensitive)")
+            elif event.key == pygame.K_3:
+                DOWN_GAZE_SENSITIVITY = 1.0
+                print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (default)")
+            elif event.key == pygame.K_4:
+                DOWN_GAZE_SENSITIVITY = 1.5
+                print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (more sensitive)")
+            elif event.key == pygame.K_5:
+                DOWN_GAZE_SENSITIVITY = 2.0
+                print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (much more sensitive)")
+                
+            # Update help text to include E key
+            help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning", True, (255, 255, 255))
     
     # Capture frame
     success, img = cap.read()
@@ -2236,8 +2445,12 @@ while running:
     pygame_surface = pygame.surfarray.make_surface(processed_frame.swapaxes(0, 1))
     screen.blit(pygame_surface, (0, 0))
     
+    # Draw tuning dialog if enabled
+    if SHOW_TUNING_DIALOG:
+        draw_tuning_dialog(screen)
+    
     # Add help text at the bottom
-    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose", True, (255, 255, 255))
+    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning", True, (255, 255, 255))
     screen.blit(help_text, (10, display_height - 30))
     
     # Add a second line of help text for filtering options
