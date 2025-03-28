@@ -1,8 +1,8 @@
 {
-    "h_threshold": 0.03290699577907804,
-    "v_threshold_up": 0.017401461657778977,
-    "v_threshold_down": 0.031589956763123796,
-    "vertical_bias": 0.1298003749652789,
+    "h_threshold": 0.026853374218821273,
+    "v_threshold_up": 0.046502424433401135,
+    "v_threshold_down": 0.02237634083754675,
+    "vertical_bias": 0.13200100620027283,
     "use_alternative_method": true,
-    "calibration_date": "2025-03-28 02:23:49"
+    "calibration_date": "2025-03-28 02:59:17"
 }

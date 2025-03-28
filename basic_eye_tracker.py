@@ -56,11 +56,21 @@ PURPLE = (255, 0, 255)
 
 # Calibration settings
 CALIBRATION_MODE = False            # Toggle for calibration mode
-CALIBRATION_POSITIONS = ["Center", "Left", "Right", "Up", "Down"]  # Positions to calibrate
+CALIBRATION_POSITIONS = [
+    "Center",           # 1. Center
+    "TopLeft",          # 2. Top left
+    "TopCenter",        # 3. Top center
+    "TopRight",         # 4. Top right
+    "MiddleLeft",       # 5. Middle left
+    "MiddleRight",      # 6. Middle right
+    "BottomLeft",       # 7. Bottom left
+    "BottomCenter",     # 8. Bottom center
+    "BottomRight"       # 9. Bottom right
+]  # Positions to calibrate in 3x3 grid
 CURRENT_CALIBRATION_POS = 0         # Current position in calibration sequence
 CALIBRATION_SAMPLES = {}            # Collected samples during calibration
 CALIBRATION_SAMPLES_REQUIRED = 30   # Number of samples to collect per position
-CALIBRATION_TIME_PER_POSITION = 5   # Seconds to spend on each calibration position
+CALIBRATION_TIME_PER_POSITION = 3   # Seconds to spend on each calibration position
 CALIBRATION_POSITION_START_TIME = 0 # When current position started
 VALIDATION_REQUIRED = 3             # Number of consecutive correct validations required
 VALIDATION_SEQUENCE = []            # Random sequence for validation
@@ -192,18 +202,25 @@ def calculate_calibration_values():
             
             averages[pos] = {'x': avg_x, 'y': avg_y}
             
-            # Store expected ideal positions for each target
-            # These are the theoretical perfect values we'd expect to see
+            # Define expected positions based on grid layout
             if pos == "Center":
-                expected_positions[pos] = {'x': 0.0, 'y': 0.0}  # Center should have zero offset
-            elif pos == "Left":
-                expected_positions[pos] = {'x': -0.4, 'y': 0.0}  # Left should have negative x
-            elif pos == "Right":
-                expected_positions[pos] = {'x': 0.4, 'y': 0.0}   # Right should have positive x
-            elif pos == "Up":
-                expected_positions[pos] = {'x': 0.0, 'y': -0.4}  # Up should have negative y
-            elif pos == "Down":
-                expected_positions[pos] = {'x': 0.0, 'y': 0.4}   # Down should have positive y
+                expected_positions[pos] = {'x': 0.0, 'y': 0.0}
+            elif pos == "TopLeft":
+                expected_positions[pos] = {'x': -0.4, 'y': -0.4}
+            elif pos == "TopCenter":
+                expected_positions[pos] = {'x': 0.0, 'y': -0.4}
+            elif pos == "TopRight":
+                expected_positions[pos] = {'x': 0.4, 'y': -0.4}
+            elif pos == "MiddleLeft":
+                expected_positions[pos] = {'x': -0.4, 'y': 0.0}
+            elif pos == "MiddleRight":
+                expected_positions[pos] = {'x': 0.4, 'y': 0.0}
+            elif pos == "BottomLeft":
+                expected_positions[pos] = {'x': -0.4, 'y': 0.4}
+            elif pos == "BottomCenter":
+                expected_positions[pos] = {'x': 0.0, 'y': 0.4}
+            elif pos == "BottomRight":
+                expected_positions[pos] = {'x': 0.4, 'y': 0.4}
     
     # If we're automatically adjusting settings based on calibration
     if CALIBRATION_AUTO_ADJUST and len(averages) >= 3:
@@ -223,23 +240,46 @@ def calculate_calibration_values():
                 }
         
         # Adjust thresholds based on errors but with damping
-        # For horizontal thresholds, use error from Left and Right positions
+        # For horizontal thresholds, calculate average scaling factor
         h_scale = 1.0
-        if 'Left' in errors:
-            h_scale *= (1.0 / max(0.1, errors['Left']['x_error'])) if errors['Left']['x_error'] > 0 else 1.0
-        if 'Right' in errors:
-            h_scale *= (1.0 / max(0.1, errors['Right']['x_error'])) if errors['Right']['x_error'] > 0 else 1.0
+        h_scales = []
         
+        # Collect scaling factors from all horizontal points
+        for pos in ["MiddleLeft", "MiddleRight", "Left", "Right"]:
+            if pos in errors:
+                if errors[pos]['x_error'] > 0:
+                    h_scales.append(1.0 / max(0.1, errors[pos]['x_error']))
+        
+        # Average all horizontal scaling factors
+        if h_scales:
+            h_scale = sum(h_scales) / len(h_scales)
+            
         # Apply stronger limiting to scale factors to prevent extreme adjustments
         h_scale = max(0.7, min(1.5, h_scale))  # Limit to 70-150% change
         
-        # For vertical thresholds, use error from Up and Down positions
+        # For vertical thresholds, calculate separate up/down scaling factors
         v_up_scale = 1.0
         v_down_scale = 1.0
-        if 'Up' in errors:
-            v_up_scale = (1.0 / max(0.1, errors['Up']['y_error'])) if errors['Up']['y_error'] > 0 else 1.0
-        if 'Down' in errors:
-            v_down_scale = (1.0 / max(0.1, errors['Down']['y_error'])) if errors['Down']['y_error'] > 0 else 1.0
+        
+        # Collect up scaling factors
+        v_up_scales = []
+        for pos in ["TopCenter", "TopLeft", "TopRight", "Up"]:
+            if pos in errors:
+                if errors[pos]['y_error'] > 0:
+                    v_up_scales.append(1.0 / max(0.1, errors[pos]['y_error']))
+        
+        # Collect down scaling factors
+        v_down_scales = []
+        for pos in ["BottomCenter", "BottomLeft", "BottomRight", "Down"]:
+            if pos in errors:
+                if errors[pos]['y_error'] > 0:
+                    v_down_scales.append(1.0 / max(0.1, errors[pos]['y_error']))
+        
+        # Average scaling factors
+        if v_up_scales:
+            v_up_scale = sum(v_up_scales) / len(v_up_scales)
+        if v_down_scales:
+            v_down_scale = sum(v_down_scales) / len(v_down_scales)
         
         # Apply stronger limiting to vertical scale factors
         v_up_scale = max(0.7, min(1.5, v_up_scale))    # Limit to 70-150% change
@@ -247,81 +287,94 @@ def calculate_calibration_values():
         
         print(f"Auto-adjusting thresholds - H:{h_scale:.2f}x, V-Up:{v_up_scale:.2f}x, V-Down:{v_down_scale:.2f}x")
     
-    # Calculate thresholds based on the difference between positions
+    # Calculate thresholds based on all calibration points
     new_h_threshold = GAZE_H_THRESHOLD  # Default to current value
     new_v_threshold_up = GAZE_V_THRESHOLD_UP
     new_v_threshold_down = GAZE_V_THRESHOLD_DOWN
     new_vertical_bias = VERTICAL_BIAS
     
-    # For horizontal gaze, we compute the midpoint between center and each extreme
-    if 'Center' in averages and 'Left' in averages:
-        # Use 70% of the distance as the threshold (empirically determined)
-        left_threshold = abs(averages['Center']['x'] - averages['Left']['x']) * 0.7
-        new_h_threshold = max(0.003, left_threshold)  # Ensure minimum sensitivity
+    # Calculate horizontal thresholds using multiple points
+    h_thresholds = []
+    if "Center" in averages:
+        center_x = averages["Center"]["x"]
         
-        # Apply auto-adjustment if enabled
-        if CALIBRATION_AUTO_ADJUST and 'Left' in errors:
-            new_h_threshold *= h_scale
+        # Calculate horizontal thresholds using all available left/right points
+        for pos in ["MiddleLeft", "Left", "TopLeft", "BottomLeft"]:
+            if pos in averages:
+                left_threshold = abs(center_x - averages[pos]["x"]) * 0.7
+                h_thresholds.append(left_threshold)
         
-        # Store midpoint for classification
-        left_midpoint = (averages['Center']['x'] + averages['Left']['x']) / 2
+        for pos in ["MiddleRight", "Right", "TopRight", "BottomRight"]:
+            if pos in averages:
+                right_threshold = abs(center_x - averages[pos]["x"]) * 0.7
+                h_thresholds.append(right_threshold)
     
-    if 'Center' in averages and 'Right' in averages:
-        right_threshold = abs(averages['Center']['x'] - averages['Right']['x']) * 0.7
-        # Take the average of left and right thresholds for better symmetry
-        if 'Left' in averages:
-            new_h_threshold = max(0.003, (left_threshold + right_threshold) / 2)
-        else:
-            new_h_threshold = max(0.003, right_threshold)
-        
+    # Calculate new horizontal threshold as average of all calculated thresholds
+    if h_thresholds:
+        new_h_threshold = max(0.003, sum(h_thresholds) / len(h_thresholds))
         # Apply auto-adjustment if enabled
-        if CALIBRATION_AUTO_ADJUST and 'Right' in errors:
+        if CALIBRATION_AUTO_ADJUST:
             new_h_threshold *= h_scale
-        
-        # Store midpoint for classification
-        right_midpoint = (averages['Center']['x'] + averages['Right']['x']) / 2
     
-    # For vertical gaze with enhanced sensitivity
-    if 'Center' in averages and 'Up' in averages:
-        up_threshold = abs(averages['Center']['y'] - averages['Up']['y']) * 0.65  # Slightly more sensitive
-        new_v_threshold_up = max(0.003, up_threshold)
+    # Calculate vertical thresholds using multiple points
+    up_thresholds = []
+    down_thresholds = []
+    if "Center" in averages:
+        center_y = averages["Center"]["y"]
         
+        # Calculate upward thresholds
+        for pos in ["TopCenter", "TopLeft", "TopRight", "Up"]:
+            if pos in averages:
+                up_threshold = abs(center_y - averages[pos]["y"]) * 0.65
+                up_thresholds.append(up_threshold)
+        
+        # Calculate downward thresholds
+        for pos in ["BottomCenter", "BottomLeft", "BottomRight", "Down"]:
+            if pos in averages:
+                down_threshold = abs(center_y - averages[pos]["y"]) * 0.65
+                down_thresholds.append(down_threshold)
+    
+    # Calculate new vertical thresholds
+    if up_thresholds:
+        new_v_threshold_up = max(0.003, sum(up_thresholds) / len(up_thresholds))
         # Apply auto-adjustment if enabled
-        if CALIBRATION_AUTO_ADJUST and 'Up' in errors:
+        if CALIBRATION_AUTO_ADJUST:
             new_v_threshold_up *= v_up_scale
-        
-        # Store midpoint for classification
-        up_midpoint = (averages['Center']['y'] + averages['Up']['y']) / 2
     
-    if 'Center' in averages and 'Down' in averages:
-        down_threshold = abs(averages['Center']['y'] - averages['Down']['y']) * 0.65  # Slightly more sensitive
-        new_v_threshold_down = max(0.002, down_threshold)
-        
+    if down_thresholds:
+        new_v_threshold_down = max(0.002, sum(down_thresholds) / len(down_thresholds))
         # Apply auto-adjustment if enabled
-        if CALIBRATION_AUTO_ADJUST and 'Down' in errors:
+        if CALIBRATION_AUTO_ADJUST:
             new_v_threshold_down *= v_down_scale
-        
-        # Store midpoint for classification
-        down_midpoint = (averages['Center']['y'] + averages['Down']['y']) / 2
     
-    # Calculate vertical bias more intelligently
-    if 'Center' in averages:
-        # Bias is calculated for the center position
-        new_vertical_bias = -averages['Center']['y'] * 0.8  # Apply a 0.8 factor to avoid over-correction
+    # Calculate vertical bias more intelligently using all center-row points
+    if "Center" in averages:
+        # Start with center position
+        center_bias = -averages["Center"]["y"] * 0.8  # Apply a 0.8 factor to avoid over-correction
+        biases = [center_bias]
         
-        # Adjust bias based on asymmetry between up and down if both are available
-        if 'Up' in averages and 'Down' in averages:
-            up_distance = abs(averages['Center']['y'] - averages['Up']['y'])
-            down_distance = abs(averages['Center']['y'] - averages['Down']['y'])
+        # Add more bias calculations from middle row points
+        if "MiddleLeft" in averages:
+            biases.append(-averages["MiddleLeft"]["y"] * 0.8)
+        if "MiddleRight" in averages:
+            biases.append(-averages["MiddleRight"]["y"] * 0.8)
+        
+        # Average all calculated biases
+        new_vertical_bias = sum(biases) / len(biases)
+        
+        # Additional adjustment to compensate for any asymmetry
+        if len(up_thresholds) > 0 and len(down_thresholds) > 0:
+            avg_up_threshold = sum(up_thresholds) / len(up_thresholds)
+            avg_down_threshold = sum(down_thresholds) / len(down_thresholds)
             
-            # If there's significant asymmetry, adjust the bias to compensate
-            if abs(up_distance - down_distance) > 0.01:
-                if up_distance > down_distance:
-                    # Up is further from center, increase bias to compensate
-                    new_vertical_bias += 0.005  # Reduced from 0.01 for less aggressive correction
+            # If there's significant asymmetry, adjust the bias slightly
+            if abs(avg_up_threshold - avg_down_threshold) > 0.01:
+                if avg_up_threshold > avg_down_threshold:
+                    # Up is further from center, increase bias
+                    new_vertical_bias += 0.005
                 else:
                     # Down is further from center, decrease bias
-                    new_vertical_bias -= 0.005  # Reduced from 0.01 for less aggressive correction
+                    new_vertical_bias -= 0.005
     
     # Apply weighted average between old and new values for stability
     # This prevents drastic changes between calibration attempts
@@ -330,13 +383,42 @@ def calculate_calibration_values():
     GAZE_V_THRESHOLD_DOWN = (CALIBRATION_DAMPING_FACTOR * new_v_threshold_down) + ((1 - CALIBRATION_DAMPING_FACTOR) * prev_v_threshold_down)
     VERTICAL_BIAS = (CALIBRATION_DAMPING_FACTOR * new_vertical_bias) + ((1 - CALIBRATION_DAMPING_FACTOR) * prev_vertical_bias)
     
-    # Store calculated values for midpoints
-    midpoints = {
-        'left': left_midpoint if 'Left' in averages and 'Center' in averages else None,
-        'right': right_midpoint if 'Right' in averages and 'Center' in averages else None,
-        'up': up_midpoint if 'Up' in averages and 'Center' in averages else None,
-        'down': down_midpoint if 'Down' in averages and 'Center' in averages else None
-    }
+    # Calculate midpoints for classification
+    midpoints = {}
+    
+    # For left/right classification
+    if "Center" in averages:
+        # For left classification, average all left points
+        left_points = []
+        for pos in ["MiddleLeft", "Left", "TopLeft", "BottomLeft"]:
+            if pos in averages:
+                left_points.append((averages["Center"]["x"] + averages[pos]["x"]) / 2)
+        if left_points:
+            midpoints["left"] = sum(left_points) / len(left_points)
+        
+        # For right classification, average all right points
+        right_points = []
+        for pos in ["MiddleRight", "Right", "TopRight", "BottomRight"]:
+            if pos in averages:
+                right_points.append((averages["Center"]["x"] + averages[pos]["x"]) / 2)
+        if right_points:
+            midpoints["right"] = sum(right_points) / len(right_points)
+        
+        # For up classification, average all top points
+        up_points = []
+        for pos in ["TopCenter", "TopLeft", "TopRight", "Up"]:
+            if pos in averages:
+                up_points.append((averages["Center"]["y"] + averages[pos]["y"]) / 2)
+        if up_points:
+            midpoints["up"] = sum(up_points) / len(up_points)
+        
+        # For down classification, average all bottom points
+        down_points = []
+        for pos in ["BottomCenter", "BottomLeft", "BottomRight", "Down"]:
+            if pos in averages:
+                down_points.append((averages["Center"]["y"] + averages[pos]["y"]) / 2)
+        if down_points:
+            midpoints["down"] = sum(down_points) / len(down_points)
     
     # Store all calculated values
     CALIBRATION_DATA = {
@@ -536,33 +618,46 @@ def get_target_position(position, frame_size):
     """Get the x,y coordinates for a target position on the screen
     
     Args:
-        position: String position name (Center, Left, Right, Up, Down)
+        position: String position name (Center, TopLeft, TopRight, etc.)
         frame_size: Tuple of (width, height) of the screen
         
     Returns:
         Tuple of (x, y) coordinates for the target
     """
     width, height = frame_size
-    center_x = width // 2
-    center_y = height // 2
     
-    # Position targets with some padding from edges
+    # Divide screen into 3x3 grid with padding
     padding_x = width // 6
     padding_y = height // 6
     
-    if position == "Center":
-        return center_x, center_y
-    elif position == "Left":
-        return padding_x, center_y
-    elif position == "Right":
-        return width - padding_x, center_y
-    elif position == "Up":
-        return center_x, padding_y
-    elif position == "Down":
-        return center_x, height - padding_y
-    else:
-        # Default to center if unknown position
-        return center_x, center_y
+    # Calculate positions for 3x3 grid
+    left_x = padding_x
+    center_x = width // 2
+    right_x = width - padding_x
+    
+    top_y = padding_y
+    middle_y = height // 2
+    bottom_y = height - padding_y
+    
+    # Map position names to coordinates
+    positions = {
+        "Center": (center_x, middle_y),
+        "TopLeft": (left_x, top_y),
+        "TopCenter": (center_x, top_y),
+        "TopRight": (right_x, top_y),
+        "MiddleLeft": (left_x, middle_y),
+        "MiddleRight": (right_x, middle_y),
+        "BottomLeft": (left_x, bottom_y),
+        "BottomCenter": (center_x, bottom_y),
+        "BottomRight": (right_x, bottom_y),
+        # For backward compatibility
+        "Left": (left_x, middle_y),
+        "Right": (right_x, middle_y),
+        "Up": (center_x, top_y),
+        "Down": (center_x, bottom_y)
+    }
+    
+    return positions.get(position, (center_x, middle_y))
 
 def draw_calibration_target(frame, position, time_elapsed, time_per_position, sample_count=0):
     """Draw an animated calibration target at the specified position
@@ -726,7 +821,7 @@ gaze_h_history = []
 gaze_v_history = []
 iris_x_history = []
 iris_y_history = []
-max_history = 10
+max_history = 20  # Was 10, increased for more stable predictions
 
 # Custom drawing specs
 IRIS_SPEC = mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
@@ -738,6 +833,67 @@ if ENABLE_LOGGING:
         writer = csv.writer(csvfile)
         writer.writerow(csv_header)
     print(f"Data logging enabled. Saving to {log_file}")
+
+# For low-pass filtering of predicted point coordinates
+last_pred_x, last_pred_y = None, None
+smoothing_factor = 0.15  # Lower = more smoothing (0.05-0.3 is good range)
+
+# Add these with other global variables
+# For Kalman filter-based smoothing
+use_kalman = True  # Set to False to disable Kalman filtering
+kalman_initialized = False
+kalman_state = np.zeros(4)  # [x, y, dx, dy]
+kalman_cov = np.eye(4) * 1000  # High initial uncertainty
+process_noise = 0.01  # How much to trust the motion model
+measurement_noise = 0.1  # How much to trust the measurements
+
+def kalman_predict():
+    """Predict step of Kalman filter"""
+    global kalman_state, kalman_cov
+    
+    # State transition matrix (position + velocity model)
+    F = np.array([[1, 0, 1, 0],  # x' = x + dx
+                  [0, 1, 0, 1],  # y' = y + dy
+                  [0, 0, 1, 0],  # dx' = dx
+                  [0, 0, 0, 1]])  # dy' = dy
+    
+    # Process noise
+    Q = np.eye(4) * process_noise
+    
+    # Predict next state
+    kalman_state = F @ kalman_state
+    kalman_cov = F @ kalman_cov @ F.T + Q
+
+def kalman_update(measurement):
+    """Update step of Kalman filter"""
+    global kalman_state, kalman_cov, kalman_initialized
+    
+    if not kalman_initialized:
+        # Initialize with first measurement
+        kalman_state[0] = measurement[0]
+        kalman_state[1] = measurement[1]
+        kalman_initialized = True
+        return (kalman_state[0], kalman_state[1])
+    
+    # Measurement matrix (we only observe position)
+    H = np.array([[1, 0, 0, 0],
+                  [0, 1, 0, 0]])
+    
+    # Measurement noise
+    R = np.eye(2) * measurement_noise
+    
+    # Kalman gain
+    K = kalman_cov @ H.T @ np.linalg.inv(H @ kalman_cov @ H.T + R)
+    
+    # Update state
+    y = measurement - H @ kalman_state
+    kalman_state = kalman_state + K @ y
+    
+    # Update covariance
+    kalman_cov = (np.eye(4) - K @ H) @ kalman_cov
+    
+    # Return filtered position
+    return (kalman_state[0], kalman_state[1])
 
 def calculate_ear(landmarks, eye_points):
     """Calculate Eye Aspect Ratio"""
@@ -761,6 +917,7 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     with improved accuracy and sensitivity
     """
     global current_iris_relative_x, current_iris_relative_y, predicted_gaze_x, predicted_gaze_y
+    global last_pred_x, last_pred_y, kalman_initialized
     
     # Get eye landmarks
     left_iris = face_landmarks.landmark[LEFT_PUPIL]
@@ -919,7 +1076,28 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     predicted_gaze_x = max(0, min(frame_width, predicted_gaze_x))
     predicted_gaze_y = max(0, min(frame_height, predicted_gaze_y))
     
-    # Add to history for smoothing
+    # Apply advanced filtering:
+    orig_x, orig_y = predicted_gaze_x, predicted_gaze_y
+    
+    if use_kalman:
+        # Apply Kalman filter for complex smooth motion
+        kalman_predict()
+        x, y = kalman_update(np.array([predicted_gaze_x, predicted_gaze_y]))
+        predicted_gaze_x, predicted_gaze_y = int(x), int(y)
+    else:
+        # Apply basic low-pass filter (exponential smoothing) as fallback
+        if last_pred_x is not None:
+            # Exponential moving average: new_value = alpha*current + (1-alpha)*previous
+            filtered_x = smoothing_factor * predicted_gaze_x + (1 - smoothing_factor) * last_pred_x
+            filtered_y = smoothing_factor * predicted_gaze_y + (1 - smoothing_factor) * last_pred_y
+            
+            predicted_gaze_x = int(filtered_x)
+            predicted_gaze_y = int(filtered_y)
+    
+    # Store current values for next frame's smoothing
+    last_pred_x, last_pred_y = predicted_gaze_x, predicted_gaze_y
+    
+    # Add to history for smoothing iris positions
     iris_x_history.append(iris_relative_x)
     iris_y_history.append(iris_relative_y)
     
@@ -928,10 +1106,11 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     if len(iris_y_history) > max_history:
         iris_y_history.pop(0)
     
-    # Use the average of recent values for more stability
+    # Use the weighted average of recent values for more stability
     if iris_x_history and iris_y_history:
-        # Weight more recent samples higher
-        weights = [0.7 + 0.3 * (i / len(iris_x_history)) for i in range(len(iris_x_history))]
+        # Modify the weights to more heavily favor previous values
+        # Older values (start of list) get weight 0.5, newest values get weight 1.0
+        weights = [0.5 + 0.5 * (i / len(iris_x_history)) for i in range(len(iris_x_history))]
         total_weight = sum(weights)
         
         # Weighted moving average
@@ -944,9 +1123,9 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     # Determine horizontal gaze direction using calibration midpoints if available
     h_direction = "Center"
     if 'midpoints' in CALIBRATION_DATA:
-        if CALIBRATION_DATA['midpoints']['left'] is not None and iris_relative_x < CALIBRATION_DATA['midpoints']['left']:
+        if CALIBRATION_DATA['midpoints'].get('left') is not None and iris_relative_x < CALIBRATION_DATA['midpoints']['left']:
             h_direction = "Left"
-        elif CALIBRATION_DATA['midpoints']['right'] is not None and iris_relative_x > CALIBRATION_DATA['midpoints']['right']:
+        elif CALIBRATION_DATA['midpoints'].get('right') is not None and iris_relative_x > CALIBRATION_DATA['midpoints']['right']:
             h_direction = "Right"
     else:
         # Fallback to threshold-based detection
@@ -958,9 +1137,9 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     # Determine vertical gaze direction using calibration midpoints if available
     v_direction = "Center"
     if 'midpoints' in CALIBRATION_DATA:
-        if CALIBRATION_DATA['midpoints']['up'] is not None and iris_relative_y < CALIBRATION_DATA['midpoints']['up']:
+        if CALIBRATION_DATA['midpoints'].get('up') is not None and iris_relative_y < CALIBRATION_DATA['midpoints']['up']:
             v_direction = "Up"
-        elif CALIBRATION_DATA['midpoints']['down'] is not None and iris_relative_y > CALIBRATION_DATA['midpoints']['down']:
+        elif CALIBRATION_DATA['midpoints'].get('down') is not None and iris_relative_y > CALIBRATION_DATA['midpoints']['down']:
             v_direction = "Down"
     else:
         # Fallback to asymmetric thresholds for upward and downward gaze
@@ -968,6 +1147,34 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
             v_direction = "Up"
         elif iris_relative_y > GAZE_V_THRESHOLD_DOWN:
             v_direction = "Down"
+    
+    # If we have multiple calibration points, we can be more precise with corner gazes
+    if 'averages' in CALIBRATION_DATA:
+        # Check for diagonal gazes (corners) by comparing with corner position averages
+        if h_direction != "Center" and v_direction != "Center":
+            # We already detected both horizontal and vertical movement, refine for corners
+            corner_positions = {
+                ("Left", "Up"): "TopLeft",
+                ("Right", "Up"): "TopRight",
+                ("Left", "Down"): "BottomLeft", 
+                ("Right", "Down"): "BottomRight"
+            }
+            corner_name = corner_positions.get((h_direction, v_direction))
+            
+            # If we have this corner calibrated, check if we're really looking at it
+            if corner_name and corner_name in CALIBRATION_DATA['averages']:
+                corner_x = CALIBRATION_DATA['averages'][corner_name]['x']
+                corner_y = CALIBRATION_DATA['averages'][corner_name]['y']
+                
+                # Calculate distance to this corner position
+                distance_to_corner = ((iris_relative_x - corner_x)**2 + (iris_relative_y - corner_y)**2)**0.5
+                
+                # If we're not close enough to the corner, revert to just reporting cardinal directions
+                if distance_to_corner > 0.1:  # Arbitrary threshold, may need tuning
+                    pass  # Keep existing h_direction and v_direction
+                else:
+                    # We're close to the corner, can explicitly report it if needed
+                    pass  # For now, just keep cardinal directions
     
     return h_direction, v_direction, iris_relative_x, iris_relative_y
 
@@ -1283,12 +1490,31 @@ def process_frame(frame):
             if show_gaze_point and predicted_gaze_x is not None and predicted_gaze_y is not None:
                 # Draw a crosshair at the predicted gaze point
                 crosshair_size = 15
-                crosshair_color = (0, 255, 0)  # Green
+                crosshair_color = (0, 255, 0)  # Green for filtered point
                 cv2.line(frame, (predicted_gaze_x - crosshair_size, predicted_gaze_y), 
                          (predicted_gaze_x + crosshair_size, predicted_gaze_y), crosshair_color, 2)
                 cv2.line(frame, (predicted_gaze_x, predicted_gaze_y - crosshair_size), 
                          (predicted_gaze_x, predicted_gaze_y + crosshair_size), crosshair_color, 2)
                 cv2.circle(frame, (predicted_gaze_x, predicted_gaze_y), 5, crosshair_color, -1)
+                
+                # If in debug mode, also show the raw (unfiltered) prediction point
+                if DEBUG_MODE and 'orig_x' in locals() and 'orig_y' in locals():
+                    orig_x = int(orig_x)
+                    orig_y = int(orig_y)
+                    cv2.circle(frame, (orig_x, orig_y), 3, (0, 0, 255), -1)  # Red dot for raw
+                    cv2.putText(frame, "Raw", (orig_x + 5, orig_y - 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+                    cv2.putText(frame, "Filtered", (predicted_gaze_x + 5, predicted_gaze_y - 5), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                    
+                    # Draw line to show the smoothing effect
+                    cv2.line(frame, (orig_x, orig_y), (predicted_gaze_x, predicted_gaze_y), 
+                             (255, 0, 255), 1, cv2.LINE_AA)
+                    
+                    # Display filtering method used
+                    filter_method = "Kalman" if use_kalman else "Low-pass"
+                    cv2.putText(frame, f"Filter: {filter_method}", (10, 290),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
             
             # Collect calibration samples if in calibration mode
             if CALIBRATION_MODE and not is_blinking:
@@ -1419,6 +1645,47 @@ while running:
                 if event.key == pygame.K_v:  # Allow more UP detection
                     VERTICAL_BIAS = 0.005
                     print(f"Light bias applied: {VERTICAL_BIAS:.4f}")
+            
+            # Toggle between Kalman and Low-pass filtering
+            if event.key == pygame.K_k:
+                use_kalman = not use_kalman
+                if use_kalman:
+                    # Reset Kalman state when switching to it
+                    kalman_initialized = False
+                print(f"Using {'Kalman' if use_kalman else 'Low-pass'} filter")
+            
+            # Increase smoothing (more filtering)
+            if event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                if use_kalman:
+                    # For Kalman, decrease measurement noise (trust measurements less)
+                    measurement_noise = max(0.01, measurement_noise * 0.8)
+                    print(f"Kalman measurement noise decreased to {measurement_noise:.4f}")
+                else:
+                    # For low-pass, decrease smoothing factor (more smoothing)
+                    smoothing_factor = max(0.05, smoothing_factor * 0.8)
+                    print(f"Smoothing factor decreased to {smoothing_factor:.4f} (more smoothing)")
+            
+            # Decrease smoothing (less filtering)
+            if event.key == pygame.K_MINUS:
+                if use_kalman:
+                    # For Kalman, increase measurement noise (trust measurements more)
+                    measurement_noise = min(1.0, measurement_noise * 1.2)
+                    print(f"Kalman measurement noise increased to {measurement_noise:.4f}")
+                else:
+                    # For low-pass, increase smoothing factor (less smoothing)
+                    smoothing_factor = min(0.5, smoothing_factor * 1.2)
+                    print(f"Smoothing factor increased to {smoothing_factor:.4f} (less smoothing)")
+                    
+            # Reset filtering parameters to defaults
+            if event.key == pygame.K_0:
+                if use_kalman:
+                    kalman_initialized = False
+                    measurement_noise = 0.1
+                    process_noise = 0.01
+                    print("Kalman filter parameters reset to defaults")
+                else:
+                    smoothing_factor = 0.15
+                    print("Low-pass filter parameters reset to defaults")
     
     # Capture frame
     success, img = cap.read()
@@ -1442,8 +1709,12 @@ while running:
     screen.blit(pygame_surface, (0, 0))
     
     # Add help text at the bottom
-    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate", True, (255, 255, 255))
+    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter", True, (255, 255, 255))
     screen.blit(help_text, (10, display_height - 30))
+    
+    # Add a second line of help text for filtering options
+    filter_help = small_font.render("+/-: adjust smoothing | 0: reset filter", True, (255, 255, 255))
+    screen.blit(filter_help, (10, display_height - 15))
     
     # Display threshold adjustment instructions if in that mode
     if threshold_adjust_mode:
