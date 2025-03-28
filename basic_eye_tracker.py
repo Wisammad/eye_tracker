@@ -308,9 +308,11 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
         
         if DEBUG_MODE and CONSOLE_DEBUG:
             print(f"v_offset: {v_offset:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}, bias: {adjusted_bias:.4f}")
+            
+        # Invert the v_offset to fix top/bottom confusion
+        v_offset = -v_offset
         
-        # Important: Use asymmetric thresholds and logic for up vs down detection
-        # For downward gaze, we need to be more sensitive as the eyelid covers part of the iris
+        # Calculate vertical gaze direction - UP is negative, DOWN is positive
         if v_offset < -v_threshold_up:
             v_direction = "Up"
         elif v_offset > v_threshold_down * (0.5 / DOWN_GAZE_SENSITIVITY):  # Make downward detection even more sensitive (0.6->0.5)
@@ -349,6 +351,9 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
             h_direction = "Left"
         elif avg_iris_x > GAZE_H_THRESHOLD:
             h_direction = "Right"
+        
+        # Invert vertical position to fix top/bottom confusion
+        vertical_position = -vertical_position
         
         # Apply sensitivity adjustment to downward gaze here as well
         if vertical_position < -GAZE_V_THRESHOLD_UP:
@@ -1532,6 +1537,9 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
     
     # Apply vertical bias to compensate for eye physiology
     iris_relative_y += VERTICAL_BIAS
+    
+    # Invert the vertical axis to fix top/bottom confusion
+    iris_relative_y = -iris_relative_y
     
     # Store current values for debugging
     current_iris_relative_x = iris_relative_x
