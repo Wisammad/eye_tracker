@@ -189,13 +189,13 @@ def determine_current_sector(iris_x, iris_y):
         # Add bias toward common gaze positions (center is typically more likely)
         position_weights = {
             "Center": 0.9,         # Slight preference for center
-            "MiddleLeft": 0.95,    # Sides are also common
+            "MiddleLeft": 0.8,     # Increased preference for MiddleLeft (reduced from 0.95)
             "MiddleRight": 0.95,
             "TopCenter": 0.95,
             "BottomCenter": 0.95,
             "TopLeft": 1.0,        # Corners are less common
             "TopRight": 1.0,
-            "BottomLeft": 0.85,    # Give stronger preference to BottomLeft since it's problematic
+            "BottomLeft": 0.7,     # Even stronger preference for BottomLeft (reduced from 0.85)
             "BottomRight": 1.0
         }
         
@@ -223,7 +223,11 @@ def determine_current_sector(iris_x, iris_y):
                 # Special handling for BottomLeft sector which is problematic
                 if sector == "BottomLeft":
                     # Apply an additional reduction to make BottomLeft more likely to be selected
-                    final_distance = final_distance * 0.8
+                    final_distance = final_distance * 0.4
+                # Special handling for MiddleLeft sector which is also problematic
+                elif sector == "MiddleLeft":
+                    # Apply an additional reduction to make MiddleLeft more likely to be selected
+                    final_distance = final_distance * 0.6
                 
                 # Update if this is closer
                 if final_distance < min_distance:
@@ -416,6 +420,10 @@ def start_calibration():
     """Start the calibration process"""
     global CALIBRATION_MODE, CALIBRATION_STATE, CURRENT_CALIBRATION_POS, CALIBRATION_SAMPLES, calibration_attempt
     global warmup_counter, CALIBRATION_POSITION_START_TIME
+    
+    # Reset sector calibration data if this is the first calibration attempt
+    if calibration_attempt == 0:
+        initialize_sector_calibration()
     
     CALIBRATION_MODE = True
     CALIBRATION_STATE = "WARMUP"  # Start with warmup period

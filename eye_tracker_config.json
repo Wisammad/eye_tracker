@@ -1,92 +1,92 @@
 {
-    "h_threshold": 0.03916437841319326,
-    "v_threshold_up": 0.03615643062389182,
-    "v_threshold_down": 0.030675811696762555,
-    "vertical_bias": 0.10514354419641135,
+    "h_threshold": 0.045712427460612694,
+    "v_threshold_up": 0.014243779430423877,
+    "v_threshold_down": 0.128846615532467,
+    "vertical_bias": -0.4527673090752078,
     "use_alternative_method": true,
-    "timestamp": 1743171628.192456,
+    "timestamp": 1743174804.0384052,
     "use_sector_calibration": true,
     "sector_data": {
         "TopLeft": {
-            "reference_iris_x": -0.04335338327440795,
-            "reference_iris_y": -0.11108636328313104,
-            "h_threshold": 0.012253782490476628,
-            "v_threshold_up": 0.015312319984679829,
-            "v_threshold_down": 0.013093318362283262,
-            "vertical_bias": 0.05269572709098563,
-            "samples_count": 6044
+            "reference_iris_x": -0.057847724783643154,
+            "reference_iris_y": 0.6144673301085423,
+            "h_threshold": 0.01983337727170792,
+            "v_threshold_up": 0.014243779430423877,
+            "v_threshold_down": 0.016065828834405004,
+            "vertical_bias": -0.21678668362643796,
+            "samples_count": 176
         },
         "TopCenter": {
-            "reference_iris_x": -0.009383881182818379,
-            "reference_iris_y": -0.13624566804740146,
-            "h_threshold": 0.018691809669246707,
-            "v_threshold_up": 0.028312419176716713,
-            "v_threshold_down": 0.01211148699541046,
-            "vertical_bias": 0.06162791374871553,
-            "samples_count": 6012
+            "reference_iris_x": -0.0037660179270359987,
+            "reference_iris_y": 0.6288397724233563,
+            "h_threshold": 0.02901233265017564,
+            "v_threshold_up": 0.005599762140157094,
+            "v_threshold_down": 0.0022039319629810314,
+            "vertical_bias": -0.2200532115415296,
+            "samples_count": 174
         },
         "TopRight": {
-            "reference_iris_x": 0.042873536433931374,
-            "reference_iris_y": -0.1390598844240455,
-            "h_threshold": 0.01775098875034793,
-            "v_threshold_up": 0.027637788336989627,
-            "v_threshold_down": 0.030675811696762555,
-            "vertical_bias": 0.05643003224513323,
-            "samples_count": 6010
+            "reference_iris_x": 0.06612976902115293,
+            "reference_iris_y": 0.6302882696881654,
+            "h_threshold": 0.026563195314067204,
+            "v_threshold_up": 0.003,
+            "v_threshold_down": 0.033870667417076804,
+            "vertical_bias": -0.2213388385199352,
+            "samples_count": 176
         },
         "MiddleLeft": {
-            "reference_iris_x": -0.03650672396415491,
-            "reference_iris_y": -0.10594725749959147,
-            "h_threshold": 0.010658828732124823,
-            "v_threshold_up": 0.02368444159147444,
-            "v_threshold_down": 0.030675811696762555,
-            "vertical_bias": 0.0450579580463204,
-            "samples_count": 6034
+            "reference_iris_x": -0.05516692021496606,
+            "reference_iris_y": 0.6623952359438013,
+            "h_threshold": 0.011985095351122832,
+            "v_threshold_up": 0.023439679963986458,
+            "v_threshold_down": 0.03999245183551501,
+            "vertical_bias": -0.23226362268481882,
+            "samples_count": 176
         },
         "Center": {
-            "reference_iris_x": -0.006406301992091434,
-            "reference_iris_y": -0.15950728257071925,
-            "h_threshold": 0.015240089529779554,
-            "v_threshold_up": 0.008503722906779587,
-            "v_threshold_down": 0.042515238350198256,
-            "vertical_bias": 0.07814349160180029,
-            "samples_count": 5962
+            "reference_iris_x": -0.013711354517440582,
+            "reference_iris_y": 0.6305521815342774,
+            "h_threshold": 0.021017532773876132,
+            "v_threshold_up": 0.014243779430423877,
+            "v_threshold_down": 0.07230268198837819,
+            "vertical_bias": -0.22039426845188215,
+            "samples_count": 180
         },
         "MiddleRight": {
-            "reference_iris_x": 0.03387760971720647,
-            "reference_iris_y": -0.15421816291806342,
-            "h_threshold": 0.010086773805136603,
-            "v_threshold_up": 0.0426407420082034,
-            "v_threshold_down": 0.02775338607640926,
-            "vertical_bias": 0.08347623713470549,
-            "samples_count": 6030
+            "reference_iris_x": 0.04395268014427698,
+            "reference_iris_y": 0.6879387195830512,
+            "h_threshold": 0.018606909425861195,
+            "v_threshold_up": 0.03468029890397941,
+            "v_threshold_down": 0.04503792878688841,
+            "vertical_bias": -0.24109672784656333,
+            "samples_count": 176
         },
         "BottomLeft": {
-            "reference_iris_x": -0.03685046786386563,
-            "reference_iris_y": -0.11803905722599714,
-            "h_threshold": 0.0124445443299709,
-            "v_threshold_up": 0.06334170496379836,
-            "v_threshold_down": 0.002,
-            "vertical_bias": 0.03270173445089682,
-            "samples_count": 6054
+            "reference_iris_x": -0.05494773939786297,
+            "reference_iris_y": 0.7227079026143937,
+            "h_threshold": 0.01326771570818973,
+            "v_threshold_up": 0.03999245183551501,
+            "v_threshold_down": 0.10073073494009754,
+            "vertical_bias": -0.1825661092301447,
+            "samples_count": 174
         },
         "BottomCenter": {
-            "reference_iris_x": -0.011197049647314975,
-            "reference_iris_y": -0.1671259515387279,
-            "h_threshold": 0.020359613825788003,
-            "v_threshold_up": 0.043916995164604934,
-            "v_threshold_down": 0.03560365064618859,
-            "vertical_bias": 0.05909411151914614,
-            "samples_count": 6008
+            "reference_iris_x": -0.02500482961902451,
+            "reference_iris_y": 0.9013632759626967,
+            "h_threshold": 0.022996357318014637,
+            "v_threshold_up": 0.1141147260373974,
+            "v_threshold_down": 0.128846615532467,
+            "vertical_bias": -0.2245372487885187,
+            "samples_count": 176
         },
         "BottomRight": {
-            "reference_iris_x": 0.041096878530347304,
-            "reference_iris_y": -0.18469574494414373,
-            "h_threshold": 0.016766044418089644,
-            "v_threshold_up": 0.03615643062389182,
-            "v_threshold_down": 0.043278868586404166,
-            "vertical_bias": 0.0773928595043982,
-            "samples_count": 6026
+            "reference_iris_x": 0.03942649747560994,
+            "reference_iris_y": 0.7742071357151881,
+            "h_threshold": 0.022201688276044344,
+            "v_threshold_up": 0.04503792878688841,
+            "v_threshold_down": 0.08054279199716212,
+            "vertical_bias": -0.19097775212303447,
+            "samples_count": 180
         }
     }
 }
