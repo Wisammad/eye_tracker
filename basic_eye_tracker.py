@@ -103,15 +103,16 @@ csv_header = ['timestamp', 'left_ear', 'right_ear', 'avg_ear', 'is_blinking', 'b
 
 # Debug mode
 DEBUG_MODE = True  # Set to True to see raw values and debugging info
+CONSOLE_DEBUG = False  # Set to True to see detailed console output
 
 # Use alternative calculation method for vertical gaze
 USE_ALTERNATIVE_METHOD = True  # Use a completely different method for vertical gaze
 
 # Gaze thresholds that will be calibrated
-GAZE_H_THRESHOLD = 0.005  # Horizontal threshold
-GAZE_V_THRESHOLD_UP = 0.010  # Upward threshold  
-GAZE_V_THRESHOLD_DOWN = 0.002  # Downward threshold
-VERTICAL_BIAS = 0.015  # Vertical bias
+GAZE_H_THRESHOLD = 0.0316  # Horizontal threshold (updated from 0.005)
+GAZE_V_THRESHOLD_UP = 0.0383  # Upward threshold (updated from 0.010)
+GAZE_V_THRESHOLD_DOWN = 0.0250  # Downward threshold (updated from 0.002)
+VERTICAL_BIAS = 0.1028  # Vertical bias (updated from 0.015)
 
 # Add these with other calibration settings
 # Sector-based calibration
@@ -122,6 +123,9 @@ SCREEN_SECTORS = [
     "BottomLeft", "BottomCenter", "BottomRight"
 ]  # 3x3 grid sectors matching our calibration positions
 SECTOR_CALIBRATION_DATA = {}  # Will store sector-specific calibration data
+
+# Add this with other global variables
+SECTOR_DISTANCE_WEIGHT = 1.0  # Weight factor for sector distance sensitivity
 
 def initialize_sector_calibration():
     """Initialize sector-specific calibration data structure"""
@@ -145,26 +149,82 @@ def initialize_sector_calibration():
 
 def determine_current_sector(iris_x, iris_y):
     """Determine which screen sector the current gaze is in based on iris position"""
-    # Define sector boundaries based on iris position ranges
+    global CALIBRATION_DATA, SECTOR_CALIBRATION_DATA, SECTOR_DISTANCE_WEIGHT
+    
+    # If we have calibration data with reference positions, use them to determine the sector
+    if 'averages' in CALIBRATION_DATA:
+        # Find the closest sector based on calibrated reference positions
+        min_distance = float('inf')
+        closest_sector = "Center"  # Default to center if no calibration
+        
+        # Use standard screen layout dimensions for weighting
+        h_weight = 1.0 * SECTOR_DISTANCE_WEIGHT
+        v_weight = 1.0 * SECTOR_DISTANCE_WEIGHT
+        
+        # Add bias toward common gaze positions (center is typically more likely)
+        position_weights = {
+            "Center": 0.9,         # Slight preference for center
+            "MiddleLeft": 0.95,    # Sides are also common
+            "MiddleRight": 0.95,
+            "TopCenter": 0.95,
+            "BottomCenter": 0.95,
+            "TopLeft": 1.0,        # Corners are less common
+            "TopRight": 1.0,
+            "BottomLeft": 1.0,
+            "BottomRight": 1.0
+        }
+        
+        for sector, data in CALIBRATION_DATA['averages'].items():
+            if sector in SCREEN_SECTORS:  # Only consider valid screen sectors
+                # Apply horizontal/vertical weights
+                dx = (iris_x - data['x']) * h_weight
+                dy = (iris_y - data['y']) * v_weight
+                
+                # Calculate basic Euclidean distance
+                basic_distance = (dx*dx + dy*dy)**0.5
+                
+                # Apply position-based weighting
+                adjusted_distance = basic_distance * position_weights.get(sector, 1.0)
+                
+                # Add context-based adjustment - use sample quality as factor
+                if sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[sector]['samples_count'] > 20:
+                    # Slightly prefer sectors with more samples (better calibrated)
+                    quality_factor = 0.95  # 5% bonus for well-calibrated sectors
+                else:
+                    quality_factor = 1.0
+                
+                final_distance = adjusted_distance * quality_factor
+                
+                # Update if this is closer
+                if final_distance < min_distance:
+                    min_distance = final_distance
+                    closest_sector = sector
+        
+        if DEBUG_MODE:
+            print(f"Selected sector: {closest_sector}, distance: {min_distance:.4f}")
+        
+        return closest_sector
+                
+    # Fallback to fixed thresholds if no calibration data
     # These boundaries are approximate and will need tuning
-    if iris_x < -0.02:  # Left side
-        if iris_y < -0.02:  # Top
+    if iris_x < -0.01:  # Left side (reduced from -0.02)
+        if iris_y < -0.01:  # Top (reduced from -0.02)
             return "TopLeft"
-        elif iris_y > 0.02:  # Bottom
+        elif iris_y > 0.01:  # Bottom (reduced from 0.02)
             return "BottomLeft"
         else:  # Middle
             return "MiddleLeft"
-    elif iris_x > 0.02:  # Right side
-        if iris_y < -0.02:  # Top
+    elif iris_x > 0.01:  # Right side (reduced from 0.02)
+        if iris_y < -0.01:  # Top
             return "TopRight"
-        elif iris_y > 0.02:  # Bottom
+        elif iris_y > 0.01:  # Bottom
             return "BottomRight"
         else:  # Middle
             return "MiddleRight"
     else:  # Center column
-        if iris_y < -0.02:  # Top
+        if iris_y < -0.01:  # Top
             return "TopCenter"
-        elif iris_y > 0.02:  # Bottom
+        elif iris_y > 0.01:  # Bottom
             return "BottomCenter"
         else:  # Middle
             return "Center"
@@ -187,6 +247,11 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
     # Determine which sector the gaze is currently in
     current_sector = determine_current_sector(avg_iris_x, avg_iris_y)
     
+    # Debug values set before determining direction
+    direction = "Center"  # Default
+    h_direction = "Center"
+    v_direction = "Center"
+    
     # Use sector-specific calibration if enabled and available for current sector
     if USE_SECTOR_CALIBRATION and current_sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] > 5:
         # Get sector-specific reference positions and thresholds
@@ -197,33 +262,38 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
         v_threshold_down = SECTOR_CALIBRATION_DATA[current_sector]['v_threshold_down']
         vertical_bias = SECTOR_CALIBRATION_DATA[current_sector]['vertical_bias']
         
-        # Calculate horizontal gaze based on sector-specific reference
+        # Calculate horizontal gaze based on vector from reference position
         h_offset = avg_iris_x - ref_x
+        
+        if DEBUG_MODE and CONSOLE_DEBUG:
+            print(f"Sector: {current_sector}, h_offset: {h_offset:.4f}, thresholds: ±{h_threshold:.4f}")
+            print(f"v_offset: {v_offset:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}")
+            print(f"Using sector {current_sector} calibration - h_thresh: {h_threshold:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}, bias: {vertical_bias:.4f}")
         
         if h_offset < -h_threshold:
             h_direction = "Left"
         elif h_offset > h_threshold:
             h_direction = "Right"
-        else:
-            h_direction = "Center"
         
         # Calculate vertical gaze with sector-specific bias
-        if USE_ALTERNATIVE_METHOD:
-            # Use alternative method with sector-specific vertical bias
-            vertical_position = avg_iris_y + vertical_bias
-        else:
-            # Use standard method with sector-specific vertical bias
-            vertical_position = avg_iris_y + vertical_bias
+        # Apply vertical bias to observed position, not reference
+        v_adjusted_y = avg_iris_y + vertical_bias
+        v_offset = v_adjusted_y - ref_y
         
-        if vertical_position < -v_threshold_up:
+        if DEBUG_MODE and CONSOLE_DEBUG:
+            print(f"v_offset: {v_offset:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}")
+        
+        if v_offset < -v_threshold_up:
             v_direction = "Up"
-        elif vertical_position > v_threshold_down:
+        elif v_offset > v_threshold_down:
             v_direction = "Down"
-        else:
-            v_direction = "Center"
             
-        if DEBUG_MODE:
-            print(f"Using sector {current_sector} calibration - h_thresh: {h_threshold:.4f}, v_up: {v_threshold_up:.4f}, v_down: {v_threshold_down:.4f}, bias: {vertical_bias:.4f}")
+        if DEBUG_MODE and USE_SECTOR_CALIBRATION:
+            if current_sector not in SECTOR_CALIBRATION_DATA:
+                print(f"Sector {current_sector} not found in calibration data")
+            elif SECTOR_CALIBRATION_DATA[current_sector]['samples_count'] <= 5:
+                print(f"Sector {current_sector} has insufficient samples: {SECTOR_CALIBRATION_DATA[current_sector]['samples_count']}")
+            
     else:
         # Use global calibration values
         if USE_ALTERNATIVE_METHOD:
@@ -235,15 +305,11 @@ def get_gaze_direction(left_iris_normalized, right_iris_normalized):
             h_direction = "Left"
         elif avg_iris_x > GAZE_H_THRESHOLD:
             h_direction = "Right"
-        else:
-            h_direction = "Center"
         
         if vertical_position < -GAZE_V_THRESHOLD_UP:
             v_direction = "Up"
         elif vertical_position > GAZE_V_THRESHOLD_DOWN:
             v_direction = "Down"
-        else:
-            v_direction = "Center"
             
         if DEBUG_MODE and USE_SECTOR_CALIBRATION:
             if current_sector not in SECTOR_CALIBRATION_DATA:
@@ -689,7 +755,7 @@ def calculate_calibration_values():
             
             # Calculate sector-specific vertical bias
             # For each sector, bias should be the offset needed to make the reference position "centered"
-            SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.8
+            SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = -averages[sector]['y'] * 0.4  # Reduced bias factor from 0.8 to 0.4
         
         # Debug output for sector-specific calibration
         print("\nSector-specific calibration values:")
@@ -746,75 +812,61 @@ def start_validation():
 def check_validation(gaze_h, gaze_v):
     """Check if the user is looking at the correct position during validation"""
     global VALIDATION_CURRENT, VALIDATION_CORRECT, CALIBRATION_STATE, calibration_attempt
+    global current_iris_relative_x, current_iris_relative_y
     
     current_target = VALIDATION_SEQUENCE[VALIDATION_CURRENT]
     correct = False
     confidence_score = 0.0
     
-    # Get current measured iris positions
-    iris_x = current_iris_relative_x
-    iris_y = current_iris_relative_y
+    # Get current sector based on the same logic used for gaze detection
+    current_sector = determine_current_sector(current_iris_relative_x, current_iris_relative_y)
     
-    # Calculate distance to expected position for more flexible validation
-    if current_target in CALIBRATION_DATA['averages']:
-        target_x = CALIBRATION_DATA['averages'][current_target]['x']
-        target_y = CALIBRATION_DATA['averages'][current_target]['y']
-        
-        # Calculate normalized distance (0.0 = perfect match, 1.0 = far away)
-        distance_x = abs(iris_x - target_x) / max(GAZE_H_THRESHOLD, 0.001)
-        distance_y = abs(iris_y - target_y) / max(GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, 0.001)
-        
-        # Higher tolerance for vertical gaze which is naturally less precise
-        if current_target in ["Up", "Down"]:
-            distance = (distance_x * 0.3) + (distance_y * 0.7)  # Weighted toward vertical for Up/Down
-        elif current_target in ["Left", "Right"]:
-            distance = (distance_x * 0.7) + (distance_y * 0.3)  # Weighted toward horizontal for Left/Right
-        else:  # Center
-            distance = (distance_x + distance_y) / 2.0  # Equal weight
-        
-        # Convert distance to confidence score (1.0 = perfect match, 0.0 = far away)
-        confidence_score = max(0.0, 1.0 - distance)
-        
-        # Consider correct if confidence is above threshold
-        if confidence_score > CALIBRATION_TOLERANCE:
-            correct = True
+    # For validation, use direct sector matching instead of gaze direction
+    # This should be more consistent with how sectors are detected
+    if current_sector == current_target:
+        # Direct sector match - high confidence
+        correct = True
+        confidence_score = 0.9
     else:
-        # Fallback to original logic if target position wasn't saved
-        # Map detected gaze to directions
-        detected_h = "Center"
-        if gaze_h == "Left":
-            detected_h = "Left"
-        elif gaze_h == "Right":
-            detected_h = "Right"
-        
-        detected_v = "Center"
-        if gaze_v == "Up":
-            detected_v = "Up"
-        elif gaze_v == "Down":
-            detected_v = "Down"
-        
-        # Check if the detected direction matches the target
-        if current_target == "Center" and detected_h == "Center" and detected_v == "Center":
+        # Check if there's still a reasonable match based on neighboring sectors
+        adjacent_sectors = get_adjacent_sectors(current_target)
+        if current_sector in adjacent_sectors:
+            # Close enough - lower confidence but still correct
             correct = True
-        elif current_target == "Left" and detected_h == "Left":
-            correct = True
-        elif current_target == "Right" and detected_h == "Right":
-            correct = True
-        elif current_target == "Up" and detected_v == "Up":
-            correct = True
-        elif current_target == "Down" and detected_v == "Down":
-            correct = True
-    
-    # Map detected gaze to directions for display purpose
-    detected_h = gaze_h
-    detected_v = gaze_v
+            confidence_score = 0.5
+        else:
+            # Calculate distance to expected position for more flexible validation
+            if current_target in CALIBRATION_DATA['averages']:
+                target_x = CALIBRATION_DATA['averages'][current_target]['x']
+                target_y = CALIBRATION_DATA['averages'][current_target]['y']
+                
+                # Calculate normalized distance (0.0 = perfect match, 1.0 = far away)
+                distance_x = abs(current_iris_relative_x - target_x) / max(GAZE_H_THRESHOLD, 0.001)
+                distance_y = abs(current_iris_relative_y - target_y) / max(GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, 0.001)
+                
+                # Calculate weighted distance
+                if current_target in ["TopCenter", "BottomCenter"]:
+                    distance = (distance_x * 0.3) + (distance_y * 0.7)  # Weighted toward vertical
+                elif current_target in ["MiddleLeft", "MiddleRight"]:
+                    distance = (distance_x * 0.7) + (distance_y * 0.3)  # Weighted toward horizontal
+                else:  # Corners and Center
+                    distance = (distance_x + distance_y) / 2.0  # Equal weight
+                
+                # Convert distance to confidence score (1.0 = perfect match, 0.0 = far away)
+                confidence_score = max(0.0, 1.0 - distance)
+                
+                # Consider correct if confidence is above threshold
+                if confidence_score > CALIBRATION_TOLERANCE:
+                    correct = True
     
     if correct:
         VALIDATION_CORRECT += 1
         print(f"Correct! {VALIDATION_CORRECT} in a row. (Confidence: {confidence_score:.2f})")
     else:
         VALIDATION_CORRECT = 0
-        print(f"Incorrect. Expected: {current_target}, Detected: {detected_h}-{detected_v} (Confidence: {confidence_score:.2f})")
+        detected_direction = f"{gaze_h}-{gaze_v}" if gaze_h != "Center" and gaze_v != "Center" else \
+                             gaze_h if gaze_v == "Center" else gaze_v
+        print(f"Incorrect. Expected: {current_target}, Detected: {current_sector} (Direction: {detected_direction}, Confidence: {confidence_score:.2f})")
     
     # Move to next validation target
     VALIDATION_CURRENT += 1
@@ -837,6 +889,36 @@ def check_validation(gaze_h, gaze_v):
             complete_calibration()
         else:
             print(f"Look {VALIDATION_SEQUENCE[VALIDATION_CURRENT]}")
+
+# Helper function to identify adjacent sectors
+def get_adjacent_sectors(sector):
+    """Return a list of sectors adjacent to the given sector"""
+    sector_grid = [
+        ["TopLeft", "TopCenter", "TopRight"],
+        ["MiddleLeft", "Center", "MiddleRight"],
+        ["BottomLeft", "BottomCenter", "BottomRight"]
+    ]
+    
+    # Find position in grid
+    row, col = -1, -1
+    for r, row_sectors in enumerate(sector_grid):
+        if sector in row_sectors:
+            row = r
+            col = row_sectors.index(sector)
+            break
+    
+    if row == -1 or col == -1:
+        return []  # Sector not found
+    
+    # Get adjacent sectors
+    adjacent = []
+    for r in range(max(0, row-1), min(3, row+2)):
+        for c in range(max(0, col-1), min(3, col+2)):
+            if r == row and c == col:
+                continue  # Skip the sector itself
+            adjacent.append(sector_grid[r][c])
+    
+    return adjacent
 
 def complete_calibration():
     """Complete the calibration process and save settings"""
@@ -2113,6 +2195,25 @@ while running:
                 if USE_SECTOR_CALIBRATION and not SECTOR_CALIBRATION_DATA:
                     initialize_sector_calibration()
                 print(f"Sector-based calibration: {'ON' if USE_SECTOR_CALIBRATION else 'OFF'}")
+            if event.key == pygame.K_z:  # Adjust sector distance weight
+                # Toggle between 3 different values
+                if SECTOR_DISTANCE_WEIGHT == 1.0:
+                    SECTOR_DISTANCE_WEIGHT = 0.5  # More sensitive (smaller distances)
+                    print(f"Sector distance weight decreased to {SECTOR_DISTANCE_WEIGHT:.1f} (more sensitive)")
+                elif SECTOR_DISTANCE_WEIGHT == 0.5:
+                    SECTOR_DISTANCE_WEIGHT = 2.0  # Less sensitive (larger distances)
+                    print(f"Sector distance weight increased to {SECTOR_DISTANCE_WEIGHT:.1f} (less sensitive)")
+                else:
+                    SECTOR_DISTANCE_WEIGHT = 1.0  # Back to default
+                    print(f"Sector distance weight reset to {SECTOR_DISTANCE_WEIGHT:.1f} (default)")
+            
+            # Add this new key handler
+            if event.key == pygame.K_v:  # V for verbose
+                CONSOLE_DEBUG = not CONSOLE_DEBUG
+                print(f"Console debug output: {'ON' if CONSOLE_DEBUG else 'OFF'}")
+                
+            # Update help text to include V key
+            help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose", True, (255, 255, 255))
     
     # Capture frame
     success, img = cap.read()
@@ -2136,7 +2237,7 @@ while running:
     screen.blit(pygame_surface, (0, 0))
     
     # Add help text at the bottom
-    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors", True, (255, 255, 255))
+    help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose", True, (255, 255, 255))
     screen.blit(help_text, (10, display_height - 30))
     
     # Add a second line of help text for filtering options
