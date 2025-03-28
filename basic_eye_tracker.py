@@ -195,7 +195,7 @@ def determine_current_sector(iris_x, iris_y):
             "BottomCenter": 0.95,
             "TopLeft": 1.0,        # Corners are less common
             "TopRight": 1.0,
-            "BottomLeft": 1.0,
+            "BottomLeft": 0.85,    # Give stronger preference to BottomLeft since it's problematic
             "BottomRight": 1.0
         }
         
@@ -219,6 +219,11 @@ def determine_current_sector(iris_x, iris_y):
                     quality_factor = 1.0
                 
                 final_distance = adjusted_distance * quality_factor
+                
+                # Special handling for BottomLeft sector which is problematic
+                if sector == "BottomLeft":
+                    # Apply an additional reduction to make BottomLeft more likely to be selected
+                    final_distance = final_distance * 0.8
                 
                 # Update if this is closer
                 if final_distance < min_distance:
