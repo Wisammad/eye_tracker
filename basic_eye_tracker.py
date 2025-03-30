@@ -10,6 +10,8 @@ import json
 import random
 import math
 from datetime import datetime
+import glob
+from collections import defaultdict
 
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
@@ -134,6 +136,33 @@ current_eye_openness = 0.0  # Will track eye vertical openness
 DOWN_GAZE_SENSITIVITY = 1.0  # Adjustable sensitivity for downward gaze detection
 SHOW_TUNING_DIALOG = False  # Whether to show the tuning dialog
 
+# For cursor visualization and stability
+CURSOR_STABLE_FRAMES = 3  # Number of frames to average for additional cursor stability
+cursor_history = []  # Store recent cursor positions
+
+# Attention testing settings 
+ATTENTION_TEST_MODE = False         # Toggle for attention test mode
+CURRENT_TEST_IMAGE = None           # Currently displayed test image
+CURRENT_TEST_IMAGE_PATH = None      # Path to current test image
+CURRENT_TEST_IMAGE_START_TIME = 0   # When current test image started displaying
+TEST_IMAGE_DURATION = 5             # How long to show each test image in seconds
+ATTENTION_HEATMAP_DATA = {}         # Store gaze points for heatmap generation
+ATTENTION_TEST_RESULTS = {}         # Store test results
+ATTENTION_CATEGORIES = []           # List of available categories for testing
+CURRENT_CATEGORY_INDEX = 0          # Current category being tested
+ATTENTION_TEST_STATE = "WAITING"    # WAITING, CATEGORY_SELECTION, TESTING, SHOWING_HEATMAP, RESULTS
+ATTENTION_TEST_IMAGES = []          # List of images for current category
+CURRENT_IMAGE_INDEX = 0             # Current image index in test
+HEATMAP_OPACITY = 0.7               # Heatmap overlay opacity
+GAUSSIAN_SIGMA = 25                 # Gaussian blur sigma for heatmap generation
+MAX_GAZE_POINTS = 100               # Maximum number of gaze points to store per image
+CURRENT_HEATMAP = None              # Currently displayed heatmap
+CURRENT_HEATMAP_START_TIME = 0      # When the current heatmap started displaying
+
+# Attention test folder paths (these will be populated at runtime)
+CATEGORIES_DIR = "./Categories"
+ATTENTION_TEST_RESULTS_DIR = "./attention_test_results"
+
 def initialize_sector_calibration():
     """Initialize sector-specific calibration data structure"""
     global SECTOR_CALIBRATION_DATA
@@ -234,7 +263,8 @@ def determine_current_sector(iris_x, iris_y):
                     min_distance = final_distance
                     closest_sector = sector
         
-        if DEBUG_MODE:
+        # Only log in detailed debug mode to reduce console spam
+        if CONSOLE_DEBUG:
             print(f"Selected sector: {closest_sector}, distance: {min_distance:.4f}")
         
         return closest_sector
@@ -1060,71 +1090,105 @@ def save_config():
     print(f"Configuration saved to {CONFIG_FILE}")
 
 def load_config():
-    """Load the configuration from a JSON file"""
-    global CALIBRATION_DATA, GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS
+    """Load configuration from file"""
+    global GAZE_H_THRESHOLD, GAZE_V_THRESHOLD_UP, GAZE_V_THRESHOLD_DOWN, VERTICAL_BIAS
     global USE_ALTERNATIVE_METHOD, USE_SECTOR_CALIBRATION, SECTOR_CALIBRATION_DATA
     
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-        
-        # Load basic settings
-        GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
-        GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
-        GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
-        VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
-        USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
-        
-        # Load sector-based calibration if available
-        USE_SECTOR_CALIBRATION = config.get('use_sector_calibration', USE_SECTOR_CALIBRATION)
-        if USE_SECTOR_CALIBRATION and 'sector_data' in config:
-            # Initialize sector calibration if not already done
-            if not SECTOR_CALIBRATION_DATA:
-                initialize_sector_calibration()
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
                 
-            # Update sector data
-            for sector, data in config['sector_data'].items():
-                if sector in SECTOR_CALIBRATION_DATA:
-                    SECTOR_CALIBRATION_DATA[sector]['reference_iris_x'] = data['reference_iris_x']
-                    SECTOR_CALIBRATION_DATA[sector]['reference_iris_y'] = data['reference_iris_y']
-                    SECTOR_CALIBRATION_DATA[sector]['h_threshold'] = data['h_threshold']
-                    SECTOR_CALIBRATION_DATA[sector]['v_threshold_up'] = data['v_threshold_up']
-                    SECTOR_CALIBRATION_DATA[sector]['v_threshold_down'] = data['v_threshold_down']
-                    SECTOR_CALIBRATION_DATA[sector]['vertical_bias'] = data['vertical_bias']
-                    SECTOR_CALIBRATION_DATA[sector]['samples_count'] = data['samples_count']
+            # Load primary gaze thresholds
+            GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
+            GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
+            GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
+            VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
+            
+            # Load feature toggles
+            USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
+            USE_SECTOR_CALIBRATION = config.get('use_sector_calibration', USE_SECTOR_CALIBRATION)
+            
+            # Initialize sector calibration data if enabled
+            if USE_SECTOR_CALIBRATION:
+                # Initialize the data structure if it doesn't exist
+                if not SECTOR_CALIBRATION_DATA:
+                    initialize_sector_calibration()
+                
+                # Load sector-specific calibration data if available
+                if 'sector_data' in config:
+                    for sector, data in config['sector_data'].items():
+                        if sector in SECTOR_CALIBRATION_DATA:
+                            SECTOR_CALIBRATION_DATA[sector].update(data)
+                            
+                            # Ensure we have all required fields
+                            if 'samples_count' not in SECTOR_CALIBRATION_DATA[sector]:
+                                SECTOR_CALIBRATION_DATA[sector]['samples_count'] = 0
+            
+            # Print loaded calibration data for debugging
+            print("\nLoaded sector calibration data:")
+            for sector, data in SECTOR_CALIBRATION_DATA.items():
+                h_threshold = data.get('h_threshold', GAZE_H_THRESHOLD)
+                v_threshold_up = data.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
+                v_threshold_down = data.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
+                vert_bias = data.get('vertical_bias', VERTICAL_BIAS)
+                samples = data.get('samples_count', 0)
+                print(f"  {sector}: H={h_threshold:.4f}, V-Up={v_threshold_up:.4f}, V-Down={v_threshold_down:.4f}, Bias={vert_bias:.4f}, Samples={samples}")
+            
+            # Initialize calibration data for the prediction system
+            initialize_calibration_for_prediction()
+            
+            print("Configuration loaded from " + CONFIG_FILE)
+            return True
         
-        # Update calibration data for UI consistency
-        CALIBRATION_DATA = {
-            'h_threshold': GAZE_H_THRESHOLD,
-            'v_threshold_up': GAZE_V_THRESHOLD_UP,
-            'v_threshold_down': GAZE_V_THRESHOLD_DOWN,
-            'vertical_bias': VERTICAL_BIAS,
-            'use_alternative_method': USE_ALTERNATIVE_METHOD,
-            'timestamp': config.get('timestamp', time.time()),
-            'use_sector_calibration': USE_SECTOR_CALIBRATION,
-            'sector_data': SECTOR_CALIBRATION_DATA if USE_SECTOR_CALIBRATION else {}
+        except Exception as e:
+            print(f"Error loading configuration: {e}")
+    
+    return False
+
+def initialize_calibration_for_prediction():
+    """Initialize calibration data for the prediction system at startup"""
+    global CALIBRATION_DATA, SECTOR_CALIBRATION_DATA
+    
+    # Create empty calibration data structure if it doesn't exist
+    if not hasattr(globals(), 'CALIBRATION_DATA') or not CALIBRATION_DATA:
+        CALIBRATION_DATA = {'averages': {}}
+    
+    # If we have sector calibration data, use it to set up prediction
+    if USE_SECTOR_CALIBRATION and SECTOR_CALIBRATION_DATA:
+        # For each sector, create reference points in CALIBRATION_DATA
+        for sector, data in SECTOR_CALIBRATION_DATA.items():
+            if 'reference_iris_x' in data and 'reference_iris_y' in data:
+                # Use the reference iris positions from the sector calibration
+                CALIBRATION_DATA['averages'][sector] = {
+                    'x': data['reference_iris_x'],
+                    'y': data['reference_iris_y'],
+                    'samples': data.get('samples_count', 0)
+                }
+        
+        print("Initialized calibration prediction system with saved calibration data")
+        
+        # If we don't have all sectors, set some defaults for missing ones
+        default_positions = {
+            'TopLeft': (-0.04, 0.45),
+            'TopCenter': (0.0, 0.45),
+            'TopRight': (0.04, 0.45),
+            'MiddleLeft': (-0.04, 0.50),
+            'Center': (0.0, 0.50),
+            'MiddleRight': (0.04, 0.50),
+            'BottomLeft': (-0.04, 0.55),
+            'BottomCenter': (0.0, 0.55),
+            'BottomRight': (0.04, 0.55)
         }
         
-        print(f"Configuration loaded from {CONFIG_FILE}")
-        
-        # Print sector information if DEBUG_MODE
-        if DEBUG_MODE and USE_SECTOR_CALIBRATION:
-            print("\nLoaded sector calibration data:")
-            for sector in SCREEN_SECTORS:
-                if sector in SECTOR_CALIBRATION_DATA and SECTOR_CALIBRATION_DATA[sector]['samples_count'] > 0:
-                    data = SECTOR_CALIBRATION_DATA[sector]
-                    print(f"  {sector}: H={data['h_threshold']:.4f}, " +
-                          f"V-Up={data['v_threshold_up']:.4f}, " +
-                          f"V-Down={data['v_threshold_down']:.4f}, " +
-                          f"Bias={data['vertical_bias']:.4f}, " +
-                          f"Samples={data['samples_count']}")
-        
-    except FileNotFoundError:
-        print(f"Configuration file {CONFIG_FILE} not found. Using default settings.")
-    except json.JSONDecodeError:
-        print(f"Error reading configuration file. Using default settings.")
-    except Exception as e:
-        print(f"Error loading configuration: {e}. Using default settings.")
+        # Fill in any missing sectors with defaults
+        for sector, (x, y) in default_positions.items():
+            if sector not in CALIBRATION_DATA['averages']:
+                CALIBRATION_DATA['averages'][sector] = {
+                    'x': x,
+                    'y': y,
+                    'samples': 0
+                }
 
 def get_target_position(position, frame_size):
     """Get the x,y coordinates for a target position on the screen
@@ -1333,7 +1397,7 @@ gaze_h_history = []
 gaze_v_history = []
 iris_x_history = []
 iris_y_history = []
-max_history = 20  # Was 10, increased for more stable predictions
+max_history = 30  # Increased from 20 to 30 for more smoothing
 
 # Custom drawing specs
 IRIS_SPEC = mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
@@ -1348,7 +1412,7 @@ if ENABLE_LOGGING:
 
 # For low-pass filtering of predicted point coordinates
 last_pred_x, last_pred_y = None, None
-smoothing_factor = 0.15  # Lower = more smoothing (0.05-0.3 is good range)
+smoothing_factor = 0.05  # Lower = more smoothing (reduced from 0.15 to 0.05 for smoother movement)
 
 # Add these with other global variables
 # For Kalman filter-based smoothing
@@ -1356,8 +1420,8 @@ use_kalman = True  # Set to False to disable Kalman filtering
 kalman_initialized = False
 kalman_state = np.zeros(4)  # [x, y, dx, dy]
 kalman_cov = np.eye(4) * 1000  # High initial uncertainty
-process_noise = 0.01  # How much to trust the motion model
-measurement_noise = 0.1  # How much to trust the measurements
+process_noise = 0.003  # Reduced from 0.005 for even smoother predictions
+measurement_noise = 0.15  # Increased from 0.1 to trust measurements less
 
 def kalman_predict():
     """Predict step of Kalman filter"""
@@ -1623,6 +1687,26 @@ def estimate_gaze(face_landmarks, frame_width, frame_height):
             predicted_gaze_y = int(filtered_y)
     
     # Store current values for next frame's smoothing
+    if last_pred_x is not None and last_pred_y is not None:
+        # Add a small deadzone - don't update if movement is too small (reduces jitter)
+        movement_distance = ((predicted_gaze_x - last_pred_x)**2 + (predicted_gaze_y - last_pred_y)**2)**0.5
+        deadzone = 2  # Pixels
+        
+        if movement_distance < deadzone:
+            # Keep previous position to prevent tiny movements
+            predicted_gaze_x, predicted_gaze_y = last_pred_x, last_pred_y
+    
+    # Add additional stabilizing by averaging recent cursor positions
+    cursor_history.append((predicted_gaze_x, predicted_gaze_y))
+    if len(cursor_history) > CURSOR_STABLE_FRAMES:
+        cursor_history.pop(0)
+    
+    # If we have enough history, use the average position
+    if len(cursor_history) == CURSOR_STABLE_FRAMES:
+        avg_x = sum(pos[0] for pos in cursor_history) / CURSOR_STABLE_FRAMES
+        avg_y = sum(pos[1] for pos in cursor_history) / CURSOR_STABLE_FRAMES
+        predicted_gaze_x, predicted_gaze_y = int(avg_x), int(avg_y)
+    
     last_pred_x, last_pred_y = predicted_gaze_x, predicted_gaze_y
     
     # Add to history for smoothing iris positions
@@ -1731,6 +1815,8 @@ def process_frame(frame):
     global gaze_horizontal, gaze_vertical, gaze_h_history, gaze_v_history
     global current_iris_relative_x, current_iris_relative_y, predicted_gaze_x, predicted_gaze_y
     global CALIBRATION_POSITION_START_TIME, CURRENT_CALIBRATION_POS, CALIBRATION_STATE, warmup_counter
+    global ATTENTION_TEST_MODE, CURRENT_TEST_IMAGE, CURRENT_TEST_IMAGE_START_TIME
+    global ATTENTION_TEST_STATE, CURRENT_HEATMAP, CURRENT_HEATMAP_START_TIME
     
     # Convert the frame colors from BGR to RGB for MediaPipe
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -2088,6 +2174,255 @@ def process_frame(frame):
     cv2.putText(frame, "C: Calibrate | D: Debug | T: Thresholds | P: Toggle Gaze Dot | F: Toggle Fullscreen | ESC: Exit", 
                 (10, h - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     
+    # Add new code for attention testing
+    if ATTENTION_TEST_MODE:
+        # Draw a semi-transparent overlay
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+        frame = cv2.addWeighted(overlay, 0.3, frame, 0.7, 0)
+        
+        # Handle different test states
+        if ATTENTION_TEST_STATE == "CATEGORY_SELECTION":
+            # Display category selection menu
+            instruction_text = "Attention Testing - Select a category (1-" + str(len(ATTENTION_CATEGORIES)) + ")"
+            cv2.putText(frame, instruction_text, (w//2 - 300, 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            
+            # List available categories
+            for i, category in enumerate(ATTENTION_CATEGORIES):
+                category_text = f"{i+1}. {category}"
+                cv2.putText(frame, category_text, (w//2 - 200, 100 + i*40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        elif ATTENTION_TEST_STATE == "TESTING":
+            # Display the current test image if available
+            if CURRENT_TEST_IMAGE is not None:
+                # Calculate elapsed time
+                time_elapsed = time.time() - CURRENT_TEST_IMAGE_START_TIME
+                
+                # Display test image
+                test_img = CURRENT_TEST_IMAGE.copy()
+                
+                # Resize test image to fit the frame while maintaining aspect ratio
+                test_h, test_w = test_img.shape[:2]
+                scale = min(w / test_w, h / test_h)
+                new_w = int(test_w * scale)
+                new_h = int(test_h * scale)
+                
+                # Resize the test image
+                test_img_resized = cv2.resize(test_img, (new_w, new_h))
+                
+                # Calculate position to center the image
+                x_offset = (w - new_w) // 2
+                y_offset = (h - new_h) // 2
+                
+                # Create a blank canvas
+                canvas = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Place the resized image on the canvas
+                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = test_img_resized
+                
+                # Record gaze data if face is detected and draw real-time gaze visualization
+                if results and results.multi_face_landmarks and not is_blinking:
+                    face_landmarks = results.multi_face_landmarks[0]
+                    # Estimate gaze direction
+                    h_direction, v_direction, iris_rel_x, iris_rel_y = estimate_gaze(face_landmarks, w, h)
+                    
+                    # Print debug info to help diagnose the issue
+                    if CONSOLE_DEBUG:
+                        print(f"Raw gaze: ({iris_rel_x:.3f}, {iris_rel_y:.3f}) h_dir: {h_direction}, v_dir: {v_direction}")
+                    
+                    # Convert from -1,1 range to 0,1 range for screen coordinates
+                    scaled_x = (iris_rel_x + 1) / 2
+                    scaled_y = (iris_rel_y + 1) / 2
+                    
+                    # CRITICAL FIX: Reverse the vertical bias effect that pushes everything down
+                    # Get the current sector for sector-specific adjustments
+                    current_sector = determine_current_sector(iris_rel_x, iris_rel_y)
+                    
+                    # Apply vertical correction based on the sector's calibration
+                    if USE_SECTOR_CALIBRATION and current_sector in SECTOR_CALIBRATION_DATA:
+                        sector_data = SECTOR_CALIBRATION_DATA[current_sector]
+                        # The bias is usually negative and pulls downward - we need to counteract it
+                        vertical_bias = sector_data.get('vertical_bias', VERTICAL_BIAS)
+                        
+                        # Apply a correction factor to compensate for the downward bias
+                        # This is the key fix to prevent the cursor from staying stuck at the bottom
+                        correction_factor = 0.5  # Adjust this if needed (0.5 means counteract half the bias)
+                        scaled_y = max(0.1, min(0.9, scaled_y + vertical_bias * correction_factor))
+                        
+                        if CONSOLE_DEBUG:
+                            print(f"Applied bias correction: {vertical_bias:.3f} with factor {correction_factor}")
+                            print(f"Adjusted scaled_y: {scaled_y:.3f}")
+                    
+                    # Calculate pixel coordinates on the displayed image
+                    gaze_x = int(x_offset + scaled_x * new_w)
+                    gaze_y = int(y_offset + scaled_y * new_h)
+                    
+                    # Process gaze for heatmap
+                    success = process_gaze_for_heatmap(gaze_x / w, gaze_y / h, w, h)
+                    if CONSOLE_DEBUG and success:
+                        print(f"Gaze point added at ({gaze_x}, {gaze_y})")
+                    
+                    # Draw debug info for the current state
+                    if DEBUG_MODE:
+                        cv2.putText(canvas, f"Sector: {current_sector}", (10, h - 80), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        cv2.putText(canvas, f"Raw: ({iris_rel_x:.2f}, {iris_rel_y:.2f})", (10, h - 60), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        cv2.putText(canvas, f"Norm: ({scaled_x:.2f}, {scaled_y:.2f})", (10, h - 40), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        
+                        # Show screen coordinates
+                        cv2.putText(canvas, f"Screen: ({gaze_x}, {gaze_y})", (10, h - 20), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    
+                    # Always draw the crosshair cursor
+                    # Create more visible crosshair cursor with different color based on validity
+                    cursor_color = (0, 255, 255)  # Cyan color for all cursor positions
+                    
+                    # Draw crosshair
+                    cv2.line(canvas, (gaze_x - 15, gaze_y), (gaze_x + 15, gaze_y), cursor_color, 2)  # Horizontal
+                    cv2.line(canvas, (gaze_x, gaze_y - 15), (gaze_x, gaze_y + 15), cursor_color, 2)  # Vertical
+                    
+                    # Pulsing circle
+                    pulse_size = 5 + int(5 * math.sin(time.time() * 5))  # Pulsing size between 5-10 pixels
+                    cv2.circle(canvas, (gaze_x, gaze_y), pulse_size, (0, 0, 255), -1)  # Filled red circle
+                    cv2.circle(canvas, (gaze_x, gaze_y), pulse_size + 5, cursor_color, 2)  # Cyan outline
+                    
+                    # Show a live mini-heatmap in the corner for immediate feedback
+                    image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                    if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
+                        # Create a mini heatmap visualization for the entire screen
+                        mini_heatmap_size = 200
+                        mini_heatmap = np.zeros((h, w), dtype=np.float32)
+                        
+                        # Add gaussians for each gaze point
+                        for point_x, point_y in ATTENTION_HEATMAP_DATA[image_name]:
+                            # Ensure coordinates are within screen bounds
+                            if 0 <= point_x < w and 0 <= point_y < h:
+                                # Create small gaussian around point
+                                x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
+                                y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
+                                
+                                for y in y_coords:
+                                    for x in x_coords:
+                                        dist_sq = (x-point_x)**2 + (y-point_y)**2
+                                        # Add bounds checking before accessing mini_heatmap
+                                        if 0 <= y < h and 0 <= x < w:
+                                            mini_heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
+                        
+                        # Normalize and colorize the heatmap
+                        if mini_heatmap.max() > 0:
+                            mini_heatmap = mini_heatmap / mini_heatmap.max()
+                        
+                        mini_heatmap_colored = cv2.applyColorMap((mini_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                        
+                        # Resize mini heatmap
+                        mini_heatmap_h, mini_heatmap_w = mini_heatmap_colored.shape[:2]
+                        mini_scale = min(mini_heatmap_size / mini_heatmap_w, mini_heatmap_size / mini_heatmap_h)
+                        mini_new_w = int(mini_heatmap_w * mini_scale)
+                        mini_new_h = int(mini_heatmap_h * mini_scale)
+                        mini_heatmap_resized = cv2.resize(mini_heatmap_colored, (mini_new_w, mini_new_h))
+                        
+                        # Draw mini heatmap in corner with label
+                        cv2.putText(canvas, f"Live Attention Map ({len(ATTENTION_HEATMAP_DATA[image_name])} points)", 
+                                   (w - mini_new_w - 10, 20), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                        
+                        # Draw border around mini heatmap
+                        cv2.rectangle(canvas, (w - mini_new_w - 10, 30), (w - 10, 30 + mini_new_h), (255, 255, 255), 1)
+                        
+                        # Place mini heatmap on canvas
+                        canvas[30:30+mini_new_h, w-mini_new_w-10:w-10] = mini_heatmap_resized
+                
+                # Blend the canvas with the frame
+                frame = canvas
+                
+                # Draw progress bar at the top
+                progress = min(1.0, time_elapsed / TEST_IMAGE_DURATION)
+                bar_width = int(w * progress)
+                cv2.rectangle(frame, (0, 0), (bar_width, 10), (0, 255, 0), -1)
+                
+                # Show category and image info
+                category = ATTENTION_CATEGORIES[CURRENT_CATEGORY_INDEX]
+                image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                info_text = f"Category: {category} - Image: {CURRENT_IMAGE_INDEX+1}/{len(ATTENTION_TEST_IMAGES)}"
+                cv2.putText(frame, info_text, (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                # Check if it's time to move to the next image
+                if time_elapsed >= TEST_IMAGE_DURATION:
+                    # Generate and show heatmap for the current image before moving on
+                    if CURRENT_TEST_IMAGE_PATH:
+                        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                        if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
+                            heatmap = generate_heatmap(CURRENT_TEST_IMAGE_PATH, ATTENTION_HEATMAP_DATA[image_name])
+                            if heatmap is not None:
+                                ATTENTION_TEST_STATE = "SHOWING_HEATMAP"
+                                global CURRENT_HEATMAP, CURRENT_HEATMAP_START_TIME
+                                CURRENT_HEATMAP = heatmap
+                                CURRENT_HEATMAP_START_TIME = time.time()
+                                return frame
+                    
+                    move_to_next_test_image()
+        
+        elif ATTENTION_TEST_STATE == "SHOWING_HEATMAP":
+            # Display the heatmap for a few seconds
+            time_elapsed = time.time() - CURRENT_HEATMAP_START_TIME
+            
+            if time_elapsed < 3.0:  # Show heatmap for 3 seconds
+                # Resize heatmap to fit the frame while maintaining aspect ratio
+                heatmap_h, heatmap_w = CURRENT_HEATMAP.shape[:2]
+                scale = min(w / heatmap_w, h / heatmap_h)
+                new_w = int(heatmap_w * scale)
+                new_h = int(heatmap_h * scale)
+                heatmap_resized = cv2.resize(CURRENT_HEATMAP, (new_w, new_h))
+                
+                # Calculate position to center the image
+                x_offset = (w - new_w) // 2
+                y_offset = (h - new_h) // 2
+                
+                # Create a blank canvas
+                canvas = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Place the resized heatmap on the canvas
+                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = heatmap_resized
+                
+                # Show title
+                cv2.putText(canvas, "Attention Heatmap", (w//2 - 150, 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                frame = canvas
+            else:
+                # After showing the heatmap, continue with next image
+                ATTENTION_TEST_STATE = "TESTING"
+                move_to_next_test_image()
+        
+        elif ATTENTION_TEST_STATE == "RESULTS":
+            # Show test results with option to restart or exit
+            results_text = "Attention Test Completed!"
+            cv2.putText(frame, results_text, (w//2 - 200, h//2 - 100), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+            
+            # Show summary of results
+            if "summary" in ATTENTION_TEST_RESULTS:
+                summary = ATTENTION_TEST_RESULTS["summary"]
+                cv2.putText(frame, f"Total Images: {summary['total_images_tested']}", (w//2 - 150, h//2), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, f"Total Gaze Points: {summary['total_gaze_points']}", (w//2 - 150, h//2 + 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, f"Results saved to: {ATTENTION_TEST_RESULTS['results_dir']}", (w//2 - 300, h//2 + 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Instructions for next actions
+            cv2.putText(frame, "Press 'R' to restart test or 'A' to exit test mode", (w//2 - 300, h//2 + 160), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Add instruction to exit attention test mode
+        cv2.putText(frame, "Press 'A' to exit attention test mode", (w//2 - 200, h - 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
     return frame
 
 running = True
@@ -2251,6 +2586,316 @@ if SHOW_TUNING_DIALOG:
 # Update the key help text to include E for tuning
 help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning", True, (255, 255, 255))
 
+def initialize_attention_test():
+    """Initialize attention testing by finding available categories and creating results directory"""
+    global ATTENTION_CATEGORIES, ATTENTION_TEST_RESULTS_DIR
+    
+    # Create results directory if it doesn't exist
+    if not os.path.exists(ATTENTION_TEST_RESULTS_DIR):
+        os.makedirs(ATTENTION_TEST_RESULTS_DIR)
+    
+    # Find all category directories
+    category_dirs = [d for d in os.listdir(CATEGORIES_DIR) if os.path.isdir(os.path.join(CATEGORIES_DIR, d))]
+    
+    # Filter to include only directories that have a train subfolder
+    valid_categories = []
+    for category in category_dirs:
+        train_dir = os.path.join(CATEGORIES_DIR, category, "train")
+        if os.path.isdir(train_dir):
+            valid_categories.append(category)
+    
+    ATTENTION_CATEGORIES = valid_categories
+    
+    print(f"Found {len(ATTENTION_CATEGORIES)} categories for attention testing: {ATTENTION_CATEGORIES}")
+    
+    return len(ATTENTION_CATEGORIES) > 0
+
+def load_category_images(category_index):
+    """Load images for a specific category"""
+    global ATTENTION_TEST_IMAGES, CURRENT_IMAGE_INDEX, ATTENTION_TEST_STATE
+    
+    if 0 <= category_index < len(ATTENTION_CATEGORIES):
+        category = ATTENTION_CATEGORIES[category_index]
+        train_dir = os.path.join(CATEGORIES_DIR, category, "train")
+        
+        # Get all image files in the train directory
+        image_files = []
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.bmp']:
+            image_files.extend(glob.glob(os.path.join(train_dir, ext)))
+        
+        # Get JSON annotations file
+        json_file = os.path.join(train_dir, "_annotations.coco.json")
+        
+        # Store the image paths and reset index
+        ATTENTION_TEST_IMAGES = image_files
+        CURRENT_IMAGE_INDEX = 0
+        
+        # Initialize empty heatmap data for each image
+        for image_path in ATTENTION_TEST_IMAGES:
+            image_name = os.path.basename(image_path)
+            ATTENTION_HEATMAP_DATA[image_name] = []
+        
+        print(f"Loaded {len(ATTENTION_TEST_IMAGES)} images for category: {category}")
+        
+        if len(ATTENTION_TEST_IMAGES) > 0:
+            ATTENTION_TEST_STATE = "TESTING"
+            return True
+        else:
+            print(f"No images found for category: {category}")
+            ATTENTION_TEST_STATE = "WAITING"
+            return False
+    else:
+        print("Invalid category index")
+        ATTENTION_TEST_STATE = "WAITING"
+        return False
+
+def process_gaze_for_heatmap(gaze_x, gaze_y, frame_width, frame_height):
+    """Process gaze coordinates for the current test image"""
+    global ATTENTION_HEATMAP_DATA, CURRENT_TEST_IMAGE_PATH, CURRENT_TEST_IMAGE
+    
+    if CURRENT_TEST_IMAGE_PATH and ATTENTION_TEST_STATE == "TESTING":
+        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+        
+        # Convert gaze coordinates (0-1 normalized) to actual screen pixels
+        screen_x = int(gaze_x * frame_width)
+        screen_y = int(gaze_y * frame_height)
+        
+        # Store points for the entire screen, not just within image boundaries
+        if image_name in ATTENTION_HEATMAP_DATA:
+            # Only store up to MAX_GAZE_POINTS points per image
+            if len(ATTENTION_HEATMAP_DATA[image_name]) < MAX_GAZE_POINTS:
+                # Store the screen coordinates directly
+                ATTENTION_HEATMAP_DATA[image_name].append((screen_x, screen_y))
+                
+                if CONSOLE_DEBUG:
+                    print(f"Gaze point added at pixel ({screen_x}, {screen_y}) for image {image_name}")
+                    
+                return True  # Successfully added gaze point
+            
+    return False  # Failed to add gaze point
+
+def load_next_test_image():
+    """Load the next image for attention testing"""
+    global CURRENT_TEST_IMAGE, CURRENT_TEST_IMAGE_PATH, CURRENT_IMAGE_INDEX
+    global CURRENT_TEST_IMAGE_START_TIME, ATTENTION_TEST_STATE
+    
+    if CURRENT_IMAGE_INDEX < len(ATTENTION_TEST_IMAGES):
+        # Load the image
+        image_path = ATTENTION_TEST_IMAGES[CURRENT_IMAGE_INDEX]
+        img = cv2.imread(image_path)
+        
+        if img is not None:
+            CURRENT_TEST_IMAGE = img
+            CURRENT_TEST_IMAGE_PATH = image_path
+            CURRENT_TEST_IMAGE_START_TIME = time.time()
+            print(f"Loaded test image: {os.path.basename(image_path)}")
+            return True
+        else:
+            print(f"Failed to load image: {image_path}")
+            CURRENT_IMAGE_INDEX += 1
+            return load_next_test_image()  # Try the next image
+    else:
+        # All images in this category have been tested
+        ATTENTION_TEST_STATE = "RESULTS"
+        print("Completed testing all images in this category")
+        generate_and_save_heatmaps()
+        return False
+
+def start_attention_test():
+    """Start the attention testing mode"""
+    global ATTENTION_TEST_MODE, ATTENTION_TEST_STATE, CURRENT_CATEGORY_INDEX
+    global ATTENTION_HEATMAP_DATA
+    
+    # Initialize if not already done
+    if not ATTENTION_CATEGORIES:
+        if not initialize_attention_test():
+            print("No valid categories found for attention testing")
+            return False
+    
+    # Reset test data
+    ATTENTION_HEATMAP_DATA = {}
+    CURRENT_CATEGORY_INDEX = 0
+    ATTENTION_TEST_MODE = True
+    ATTENTION_TEST_STATE = "CATEGORY_SELECTION"  # Start with category selection instead of waiting
+    
+    print("Starting attention test - Select a category")
+    return True
+
+def move_to_next_test_image():
+    """Move to the next image in the attention test"""
+    global CURRENT_IMAGE_INDEX, CURRENT_CATEGORY_INDEX
+    
+    # Move to next image
+    CURRENT_IMAGE_INDEX += 1
+    
+    # Check if we've gone through all images in current category
+    if CURRENT_IMAGE_INDEX >= len(ATTENTION_TEST_IMAGES):
+        # Move to next category
+        CURRENT_CATEGORY_INDEX += 1
+        
+        # Check if we've gone through all categories
+        if CURRENT_CATEGORY_INDEX >= len(ATTENTION_CATEGORIES):
+            # Test completed
+            ATTENTION_TEST_STATE = "RESULTS"
+            generate_and_save_heatmaps()
+            return False
+        else:
+            # Load next category
+            if load_category_images(CURRENT_CATEGORY_INDEX):
+                return load_next_test_image()
+            else:
+                return False
+    else:
+        # Load next image in current category
+        return load_next_test_image()
+
+def generate_heatmap(image_path, gaze_points):
+    """Generate a heatmap visualization for an image based on gaze points"""
+    # Load the original image
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Failed to load image for heatmap: {image_path}")
+        return None
+    
+    # Get the image display dimensions used during testing
+    frame_h, frame_w = 0, 0
+    if hasattr(pygame, 'display') and pygame.display.get_surface():
+        frame_w, frame_h = pygame.display.get_surface().get_size()
+    else:
+        # Use fallback values if pygame display info isn't available
+        frame_w, frame_h = 1024, 768
+    
+    # Resize the original image to fit the display
+    scale = min(frame_w / image.shape[1], frame_h / image.shape[0])
+    new_w = int(image.shape[1] * scale)
+    new_h = int(image.shape[0] * scale)
+    resized_image = cv2.resize(image, (new_w, new_h))
+    
+    # Create a blank canvas the size of the screen
+    canvas = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
+    
+    # Place the resized image in the center of the canvas
+    y_offset = (frame_h - new_h) // 2
+    x_offset = (frame_w - new_w) // 2
+    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized_image
+    
+    # Create an empty heatmap for the entire screen
+    heatmap = np.zeros((frame_h, frame_w), dtype=np.float32)
+    
+    print(f"Generating heatmap for {image_path} with {len(gaze_points)} gaze points")
+    print(f"Image size: {image.shape[1]}x{image.shape[0]}, Display size: {frame_w}x{frame_h}")
+    print(f"Scaled size: {new_w}x{new_h}, Offset: ({x_offset}, {y_offset})")
+    
+    # Add gaussian at each gaze point
+    for point in gaze_points:
+        screen_x, screen_y = point
+        
+        # Ensure coordinates are within screen bounds
+        if 0 <= screen_x < frame_w and 0 <= screen_y < frame_h:
+            # Create small matrix with single 1 value at gaze point
+            small_heatmap = np.zeros((frame_h, frame_w), dtype=np.float32)
+            small_heatmap[screen_y, screen_x] = 1
+            
+            # Apply gaussian blur to create a "hotspot"
+            small_heatmap = cv2.GaussianBlur(small_heatmap, (0, 0), GAUSSIAN_SIGMA)
+            
+            # Normalize the small heatmap
+            if small_heatmap.max() > 0:
+                small_heatmap = small_heatmap / small_heatmap.max()
+            
+            # Add to the main heatmap
+            heatmap = np.maximum(heatmap, small_heatmap)
+    
+    # Normalize heatmap to 0-1 range
+    if heatmap.max() > 0:
+        heatmap = heatmap / heatmap.max()
+    else:
+        print("Warning: Heatmap is empty - no valid gaze points found")
+    
+    # Apply colormap to the heatmap
+    heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    
+    # Blend heatmap with canvas
+    blended = cv2.addWeighted(canvas, 1.0 - HEATMAP_OPACITY, heatmap_colored, HEATMAP_OPACITY, 0)
+    
+    return blended
+
+def generate_and_save_heatmaps():
+    """Generate heatmaps for all tested images and save them"""
+    global ATTENTION_HEATMAP_DATA, ATTENTION_TEST_RESULTS
+    
+    results_dir = os.path.join(ATTENTION_TEST_RESULTS_DIR, f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    os.makedirs(results_dir, exist_ok=True)
+    
+    print(f"Generating and saving heatmaps to {results_dir}")
+    
+    # Generate heatmap for each image
+    for image_name, gaze_points in ATTENTION_HEATMAP_DATA.items():
+        if not gaze_points:
+            print(f"No gaze data for {image_name}, skipping")
+            continue
+        
+        # Find original image path
+        original_path = None
+        for category in ATTENTION_CATEGORIES:
+            train_dir = os.path.join(CATEGORIES_DIR, category, "train")
+            potential_path = os.path.join(train_dir, image_name)
+            if os.path.exists(potential_path):
+                original_path = potential_path
+                break
+        
+        if original_path:
+            # Generate heatmap
+            heatmap = generate_heatmap(original_path, gaze_points)
+            
+            if heatmap is not None:
+                # Save heatmap
+                output_path = os.path.join(results_dir, f"heatmap_{image_name}")
+                cv2.imwrite(output_path, heatmap)
+                print(f"Saved heatmap: {output_path}")
+                
+                # Save original image for reference
+                cv2.imwrite(os.path.join(results_dir, f"original_{image_name}"), cv2.imread(original_path))
+                
+                # Save gaze point data as JSON
+                gaze_data_path = os.path.join(results_dir, f"gaze_data_{os.path.splitext(image_name)[0]}.json")
+                with open(gaze_data_path, 'w') as f:
+                    json.dump(gaze_points, f)
+        else:
+            print(f"Could not find original image for {image_name}")
+    
+    # Create summary file
+    summary_path = os.path.join(results_dir, "summary.json")
+    summary = {
+        "test_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "categories_tested": ATTENTION_CATEGORIES,
+        "images_per_category": {cat: len([img for img in ATTENTION_TEST_IMAGES if cat in img]) for cat in ATTENTION_CATEGORIES},
+        "total_images_tested": len(ATTENTION_HEATMAP_DATA),
+        "total_gaze_points": sum(len(points) for points in ATTENTION_HEATMAP_DATA.values())
+    }
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=4)
+    
+    # Store the path to results for display
+    ATTENTION_TEST_RESULTS["results_dir"] = results_dir
+    ATTENTION_TEST_RESULTS["summary"] = summary
+    
+    print(f"Attention test results saved to {results_dir}")
+    return results_dir
+
+def select_category(index):
+    """Select a category by index"""
+    global CURRENT_CATEGORY_INDEX, ATTENTION_TEST_STATE
+    
+    if 0 <= index < len(ATTENTION_CATEGORIES):
+        CURRENT_CATEGORY_INDEX = index
+        if load_category_images(CURRENT_CATEGORY_INDEX):
+            ATTENTION_TEST_STATE = "TESTING"
+            load_next_test_image()
+            return True
+    return False
+
 while running:
     # Handle events
     for event in pygame.event.get():
@@ -2359,6 +3004,9 @@ while running:
                 if use_kalman:
                     # Reset Kalman state when switching to it
                     kalman_initialized = False
+                    # Use less aggressive parameters
+                    measurement_noise = 0.3  # Increased from 0.1 - trust measurements more
+                    process_noise = 0.025     # Increased from 0.01 - allow more natural movement
                 print(f"Using {'Kalman' if use_kalman else 'Low-pass'} filter")
             
             # Increase smoothing (more filtering)
@@ -2387,11 +3035,11 @@ while running:
             if event.key == pygame.K_0:
                 if use_kalman:
                     kalman_initialized = False
-                    measurement_noise = 0.1
-                    process_noise = 0.01
+                    measurement_noise = 0.3    # Increased from 0.1
+                    process_noise = 0.025      # Increased from 0.01
                     print("Kalman filter parameters reset to defaults")
                 else:
-                    smoothing_factor = 0.15
+                    smoothing_factor = 0.25    # Increased from 0.15 - less smoothing
                     print("Low-pass filter parameters reset to defaults")
             
             # Find the event.key handling section starting with "if event.type == pygame.KEYDOWN:" and add this new case
@@ -2442,8 +3090,39 @@ while running:
                 DOWN_GAZE_SENSITIVITY = 2.0
                 print(f"Down gaze sensitivity set to {DOWN_GAZE_SENSITIVITY} (much more sensitive)")
                 
-            # Update help text to include E key
-            help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning", True, (255, 255, 255))
+            # Attention testing key handler
+            if event.key == pygame.K_a:  # Toggle attention test mode
+                if not ATTENTION_TEST_MODE:
+                    if start_attention_test():
+                        print("Starting attention testing mode")
+                    else:
+                        print("Failed to start attention testing mode")
+                else:
+                    ATTENTION_TEST_MODE = False
+                    ATTENTION_TEST_STATE = "WAITING"
+                    print("Exited attention testing mode")
+            
+            # Handle category selection (keys 1-9)
+            if ATTENTION_TEST_MODE and ATTENTION_TEST_STATE == "CATEGORY_SELECTION":
+                # Check for number keys 1-9
+                if pygame.K_1 <= event.key <= pygame.K_9:
+                    category_index = event.key - pygame.K_1  # Convert to 0-based index
+                    if select_category(category_index):
+                        print(f"Selected category: {ATTENTION_CATEGORIES[category_index]}")
+                    else:
+                        print(f"Invalid category selection")
+            
+            # Handle space bar for continuing in attention test
+            if event.key == pygame.K_SPACE and ATTENTION_TEST_MODE:
+                if ATTENTION_TEST_STATE == "CATEGORY_SELECTION":
+                    # Default to first category
+                    if select_category(0):
+                        print(f"Selected default category: {ATTENTION_CATEGORIES[0]}")
+                elif ATTENTION_TEST_STATE == "RESULTS":
+                    start_attention_test()  # Restart test
+                    
+            # Update help text to include all options
+            help_text = small_font.render("ESC: exit | R: reset | L: log | D: debug | T: threshold | M: method | C: calibrate | K: filter | X: sectors | Z: sensitivity | V: verbose | E: tuning | A: attention test", True, (255, 255, 255))
     
     # Capture frame
     success, img = cap.read()
