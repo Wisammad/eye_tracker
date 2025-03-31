@@ -12,6 +12,10 @@ import math
 from datetime import datetime
 import glob
 from collections import defaultdict
+import threading
+import textwrap
+import webbrowser
+import tempfile
 
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh
@@ -105,7 +109,7 @@ csv_header = ['timestamp', 'left_ear', 'right_ear', 'avg_ear', 'is_blinking', 'b
 
 # Debug mode
 DEBUG_MODE = True  # Set to True to see raw values and debugging info
-CONSOLE_DEBUG = False  # Set to True to see detailed console output
+CONSOLE_DEBUG = True  # Set to True to see detailed console output
 
 # Use alternative calculation method for vertical gaze
 USE_ALTERNATIVE_METHOD = True  # Use a completely different method for vertical gaze
@@ -155,13 +159,23 @@ ATTENTION_TEST_IMAGES = []          # List of images for current category
 CURRENT_IMAGE_INDEX = 0             # Current image index in test
 HEATMAP_OPACITY = 0.7               # Heatmap overlay opacity (only for image testing)
 GAUSSIAN_SIGMA = 25                 # Gaussian blur sigma for heatmap generation (only for image testing)
-MAX_GAZE_POINTS = 100               # Maximum number of gaze points to store per image
+MAX_GAZE_POINTS = 1000              # Maximum number of gaze points to store per image
 CURRENT_HEATMAP = None              # Currently displayed heatmap (only for image testing)
 CURRENT_HEATMAP_START_TIME = 0      # When the current heatmap started displaying (only for image testing)
 
 # Attention test folder paths (these will be populated at runtime)
-CATEGORIES_DIR = "./Categories"
+CATEGORIES_DIR = "./categories"
 ATTENTION_TEST_RESULTS_DIR = "./attention_test_results"
+
+# NEW: Add global variable to store image display information
+CURRENT_IMAGE_DISPLAY_INFO = {
+    'image_width': 0,
+    'image_height': 0, 
+    'display_width': 0,
+    'display_height': 0,
+    'display_x': 0,
+    'display_y': 0
+}
 
 def initialize_sector_calibration():
     """Initialize sector-specific calibration data structure"""
@@ -2271,8 +2285,20 @@ def process_frame(frame):
                     
                     # Only proceed if we have valid predicted coordinates
                     if predicted_gaze_x is not None and predicted_gaze_y is not None:
-                        # Process gaze for heatmap using the same coordinates used for the cursor
-                        success = process_gaze_for_heatmap(predicted_gaze_x / w, predicted_gaze_y / h, w, h)
+                        # Calculate image display information once per frame
+                        global CURRENT_IMAGE_DISPLAY_INFO
+                        CURRENT_IMAGE_DISPLAY_INFO = {
+                            'image_width': test_w,
+                            'image_height': test_h,
+                            'display_width': new_w,
+                            'display_height': new_h,
+                            'display_x': x_offset,
+                            'display_y': y_offset
+                        }
+                        
+                        # FIXED: Pass actual screen coordinates, not normalized ones
+                        success = process_gaze_for_heatmap(predicted_gaze_x, predicted_gaze_y, w, h)
+                        
                         if CONSOLE_DEBUG and success:
                             print(f"Gaze point added at ({predicted_gaze_x}, {predicted_gaze_y})")
                         
@@ -2313,7 +2339,10 @@ def process_frame(frame):
                             mini_heatmap = np.zeros((h, w), dtype=np.float32)
                             
                             # Add gaussians for each gaze point
-                            for point_x, point_y in ATTENTION_HEATMAP_DATA[image_name]:
+                            for point in ATTENTION_HEATMAP_DATA[image_name]:
+                                # Get x and y coordinates (first two elements of the tuple)
+                                point_x, point_y = point[0], point[1]
+                                
                                 # Ensure coordinates are within screen bounds
                                 if 0 <= point_x < w and 0 <= point_y < h:
                                     # Create small gaussian around point
@@ -2368,51 +2397,15 @@ def process_frame(frame):
                 
                 # Check if it's time to move to the next image
                 if time_elapsed >= TEST_IMAGE_DURATION:
-                    # Generate and show heatmap for the current image before moving on
-                    if CURRENT_TEST_IMAGE_PATH:
-                        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
-                        if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
-                            heatmap = generate_heatmap(CURRENT_TEST_IMAGE_PATH, ATTENTION_HEATMAP_DATA[image_name])
-                            if heatmap is not None:
-                                ATTENTION_TEST_STATE = "SHOWING_HEATMAP"
-                                global CURRENT_HEATMAP, CURRENT_HEATMAP_START_TIME
-                                CURRENT_HEATMAP = heatmap
-                                CURRENT_HEATMAP_START_TIME = time.time()
-                                return frame
-                    
+                    # Skip heatmap generation and directly move to the next image
                     move_to_next_test_image()
+                    return frame
         
         elif ATTENTION_TEST_STATE == "SHOWING_HEATMAP":
-            # Display the heatmap for a few seconds
-            time_elapsed = time.time() - CURRENT_HEATMAP_START_TIME
-            
-            if time_elapsed < 3.0:  # Show heatmap for 3 seconds
-                # Resize heatmap to fit the frame while maintaining aspect ratio
-                heatmap_h, heatmap_w = CURRENT_HEATMAP.shape[:2]
-                scale = min(w / heatmap_w, h / heatmap_h)
-                new_w = int(heatmap_w * scale)
-                new_h = int(heatmap_h * scale)
-                heatmap_resized = cv2.resize(CURRENT_HEATMAP, (new_w, new_h))
-                
-                # Calculate position to center the image
-                x_offset = (w - new_w) // 2
-                y_offset = (h - new_h) // 2
-                
-                # Create a blank canvas
-                canvas = np.zeros((h, w, 3), dtype=np.uint8)
-                
-                # Place the resized heatmap on the canvas
-                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = heatmap_resized
-                
-                # Show title
-                cv2.putText(canvas, "Attention Heatmap", (w//2 - 150, 40), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                frame = canvas
-            else:
-                # After showing the heatmap, continue with next image
-                ATTENTION_TEST_STATE = "TESTING"
-                move_to_next_test_image()
+            # Skip heatmap display and continue with next image
+            ATTENTION_TEST_STATE = "TESTING"
+            move_to_next_test_image()
+            return frame
         
         elif ATTENTION_TEST_STATE == "RESULTS":
             # Show test results with option to restart or exit
@@ -2672,16 +2665,18 @@ def process_gaze_for_heatmap(gaze_x, gaze_y, frame_width, frame_height):
     if CURRENT_TEST_IMAGE_PATH and ATTENTION_TEST_STATE == "TESTING":
         image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
         
-        # Convert gaze coordinates (0-1 normalized) to actual screen pixels
-        screen_x = int(gaze_x * frame_width)
-        screen_y = int(gaze_y * frame_height)
+        # IMPORTANT: These are already screen coordinates, no need to multiply by frame dimensions
+        # The caller is already passing screen pixel coordinates
+        screen_x = int(gaze_x)
+        screen_y = int(gaze_y)
         
         # Store points for the entire screen, not just within image boundaries
         if image_name in ATTENTION_HEATMAP_DATA:
             # Only store up to MAX_GAZE_POINTS points per image
             if len(ATTENTION_HEATMAP_DATA[image_name]) < MAX_GAZE_POINTS:
-                # Store the screen coordinates directly
-                ATTENTION_HEATMAP_DATA[image_name].append((screen_x, screen_y))
+                # Store the screen coordinates directly with timestamp
+                timestamp = time.time()
+                ATTENTION_HEATMAP_DATA[image_name].append((screen_x, screen_y, timestamp))
                 
                 if CONSOLE_DEBUG:
                     print(f"Gaze point added at pixel ({screen_x}, {screen_y}) for image {image_name}")
@@ -2715,8 +2710,26 @@ def load_next_test_image():
         # End the test and show results
         ATTENTION_TEST_STATE = "RESULTS"
         print("Completed testing all images in the selected category")
-        generate_and_save_heatmaps()
+        generate_and_save_results()
         return False
+
+def move_to_next_test_image():
+    """Move to the next image in the attention test"""
+    global CURRENT_IMAGE_INDEX, ATTENTION_TEST_STATE
+    
+    # Move to next image
+    CURRENT_IMAGE_INDEX += 1
+    
+    # Check if we've gone through all images in current category
+    if CURRENT_IMAGE_INDEX >= len(ATTENTION_TEST_IMAGES):
+        # End the test as all images in the selected category have been viewed
+        ATTENTION_TEST_STATE = "RESULTS"
+        print("Completed testing all images in the selected category")
+        generate_and_save_results()
+        return False
+    else:
+        # Load next image in current category
+        return load_next_test_image()
 
 def start_attention_test():
     """Start the attention testing mode"""
@@ -2737,108 +2750,38 @@ def start_attention_test():
     print("Starting attention test - please select a category")
     return True
 
-def move_to_next_test_image():
-    """Move to the next image in the attention test"""
-    global CURRENT_IMAGE_INDEX, ATTENTION_TEST_STATE
-    
-    # Move to next image
-    CURRENT_IMAGE_INDEX += 1
-    
-    # Check if we've gone through all images in current category
-    if CURRENT_IMAGE_INDEX >= len(ATTENTION_TEST_IMAGES):
-        # End the test as all images in the selected category have been viewed
-        ATTENTION_TEST_STATE = "RESULTS"
-        print("Completed testing all images in the selected category")
-        generate_and_save_heatmaps()
-        return False
-    else:
-        # Load next image in current category
-        return load_next_test_image()
-
-def generate_heatmap(image_path, gaze_points):
-    """Generate a heatmap visualization for an image based on gaze points"""
-    # Load the original image
-    image = cv2.imread(image_path)
-    if image is None:
-        print(f"Failed to load image for heatmap: {image_path}")
-        return None
-    
-    # Get the image display dimensions used during testing
-    frame_h, frame_w = 0, 0
-    if hasattr(pygame, 'display') and pygame.display.get_surface():
-        frame_w, frame_h = pygame.display.get_surface().get_size()
-    else:
-        # Use fallback values if pygame display info isn't available
-        frame_w, frame_h = 1024, 768
-    
-    # Resize the original image to fit the display
-    scale = min(frame_w / image.shape[1], frame_h / image.shape[0])
-    new_w = int(image.shape[1] * scale)
-    new_h = int(image.shape[0] * scale)
-    resized_image = cv2.resize(image, (new_w, new_h))
-    
-    # Create a blank canvas the size of the screen
-    canvas = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
-    
-    # Place the resized image in the center of the canvas
-    y_offset = (frame_h - new_h) // 2
-    x_offset = (frame_w - new_w) // 2
-    canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized_image
-    
-    # Create an empty heatmap for the entire screen
-    heatmap = np.zeros((frame_h, frame_w), dtype=np.float32)
-    
-    print(f"Generating heatmap for {image_path} with {len(gaze_points)} gaze points")
-    print(f"Image size: {image.shape[1]}x{image.shape[0]}, Display size: {frame_w}x{frame_h}")
-    print(f"Scaled size: {new_w}x{new_h}, Offset: ({x_offset}, {y_offset})")
-    
-    # Add gaussian at each gaze point
-    for point in gaze_points:
-        screen_x, screen_y = point
-        
-        # Ensure coordinates are within screen bounds
-        if 0 <= screen_x < frame_w and 0 <= screen_y < frame_h:
-            # Create small matrix with single 1 value at gaze point
-            small_heatmap = np.zeros((frame_h, frame_w), dtype=np.float32)
-            small_heatmap[screen_y, screen_x] = 1
-            
-            # Apply gaussian blur to create a "hotspot"
-            small_heatmap = cv2.GaussianBlur(small_heatmap, (0, 0), GAUSSIAN_SIGMA)
-            
-            # Normalize the small heatmap
-            if small_heatmap.max() > 0:
-                small_heatmap = small_heatmap / small_heatmap.max()
-            
-            # Add to the main heatmap
-            heatmap = np.maximum(heatmap, small_heatmap)
-    
-    # Normalize heatmap to 0-1 range
-    if heatmap.max() > 0:
-        heatmap = heatmap / heatmap.max()
-    else:
-        print("Warning: Heatmap is empty - no valid gaze points found")
-    
-    # Apply colormap to the heatmap
-    heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    
-    # Blend heatmap with canvas
-    blended = cv2.addWeighted(canvas, 1.0 - HEATMAP_OPACITY, heatmap_colored, HEATMAP_OPACITY, 0)
-    
-    return blended
-
-def generate_and_save_heatmaps():
-    """Generate heatmaps for all tested images and save them"""
+def generate_and_save_results():
+    """Generate analysis of gaze patterns and save the data"""
     global ATTENTION_HEATMAP_DATA, ATTENTION_TEST_RESULTS
     
     results_dir = os.path.join(ATTENTION_TEST_RESULTS_DIR, f"test_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     os.makedirs(results_dir, exist_ok=True)
     
-    print(f"Generating and saving heatmaps to {results_dir}")
+    print(f"Generating and saving analysis to {results_dir}")
     
     # Get current category name
     current_category = ATTENTION_CATEGORIES[CURRENT_CATEGORY_INDEX] if CURRENT_CATEGORY_INDEX < len(ATTENTION_CATEGORIES) else "Unknown"
+    clean_category_name = current_category.split('.')[0]  # Use clean category name
     
-    # Generate heatmap for each image
+    # Load category annotations
+    annotations_data = load_annotations_for_category(current_category)
+    if not annotations_data:
+        print(f"Could not load annotations for category {current_category}")
+    
+    # Initialize CSV data for this category
+    csv_data = []
+    
+    # Get frame dimensions - use last known dimensions or default
+    frame_w, frame_h = 1024, 768
+    if hasattr(pygame, 'display') and pygame.display.get_surface():
+        frame_w, frame_h = pygame.display.get_surface().get_size()
+    
+    # Create a map of category IDs to names
+    categories_map = {}
+    if annotations_data and 'categories' in annotations_data:
+        categories_map = {cat['id']: cat['name'] for cat in annotations_data['categories']}
+    
+    # Process each image
     for image_name, gaze_points in ATTENTION_HEATMAP_DATA.items():
         if not gaze_points:
             print(f"No gaze data for {image_name}, skipping")
@@ -2852,24 +2795,74 @@ def generate_and_save_heatmaps():
             original_path = potential_path
         
         if original_path:
-            # Generate heatmap
-            heatmap = generate_heatmap(original_path, gaze_points)
+            # Save gaze point data as JSON
+            gaze_data_path = os.path.join(results_dir, f"gaze_data_{os.path.splitext(image_name)[0]}.json")
+            with open(gaze_data_path, 'w') as f:
+                # Store just the x,y coordinates for backward compatibility
+                json.dump([(p[0], p[1]) for p in gaze_points], f)
             
-            if heatmap is not None:
-                # Save heatmap
-                output_path = os.path.join(results_dir, f"heatmap_{image_name}")
-                cv2.imwrite(output_path, heatmap)
-                print(f"Saved heatmap: {output_path}")
+            # Analyze gaze sequence if annotations are available
+            if annotations_data:
+                # Find the image info in the annotations
+                image_info = None
+                image_id = None
+                for img in annotations_data.get('images', []):
+                    if img.get('file_name') == image_name:
+                        image_info = img
+                        image_id = img.get('id')
+                        break
                 
-                # Save original image for reference
-                cv2.imwrite(os.path.join(results_dir, f"original_{image_name}"), cv2.imread(original_path))
-                
-                # Save gaze point data as JSON
-                gaze_data_path = os.path.join(results_dir, f"gaze_data_{os.path.splitext(image_name)[0]}.json")
-                with open(gaze_data_path, 'w') as f:
-                    json.dump(gaze_points, f)
+                if image_info and image_id is not None:
+                    # Get annotations for this specific image
+                    image_annotations = [a for a in annotations_data.get('annotations', []) 
+                                      if a.get('image_id') == image_id]
+                    
+                    # Analyze gaze sequence
+                    analysis_result = analyze_gaze_sequence(
+                        gaze_points, image_annotations, image_info, frame_w, frame_h, categories_map
+                    )
+                    
+                    # Save sequence analysis as JSON
+                    sequence_path = os.path.join(results_dir, f"sequence_{os.path.splitext(image_name)[0]}.json")
+                    with open(sequence_path, 'w') as f:
+                        json.dump(analysis_result, f, indent=4)
+                    
+                    # Add to CSV data
+                    image_csv_data = {
+                        'image_name': image_name,
+                        'viewing_sequence': analysis_result['viewing_sequence']
+                    }
+                    
+                    # Get all possible region categories for this category
+                    all_categories = categories_map
+                    
+                    # Add order and time data for each category
+                    for cat_id, cat_name in all_categories.items():
+                        # Add order info
+                        order_key = f"{cat_name}_order"
+                        image_csv_data[order_key] = analysis_result['region_order'].get(cat_name, "NaN")
+                        
+                        # Add time info
+                        time_key = f"time_on_{cat_name}"
+                        image_csv_data[time_key] = analysis_result['time_on_region'].get(cat_name, 0.0)
+                    
+                    csv_data.append(image_csv_data)
         else:
             print(f"Could not find original image for {image_name}")
+    
+    # Save CSV data for the category
+    if csv_data:
+        # Write CSV file - use the category name as the filename
+        csv_path = os.path.join(results_dir, f"{clean_category_name}.csv")
+        with open(csv_path, 'w', newline='') as csvfile:
+            # Get all fields from the first item
+            if csv_data:
+                fieldnames = csv_data[0].keys()
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(csv_data)
+        
+        print(f"Saved viewing analysis CSV: {csv_path}")
     
     # Create summary file
     summary_path = os.path.join(results_dir, "summary.json")
@@ -2902,6 +2895,314 @@ def select_category(index):
             load_next_test_image()
             return True
     return False
+
+def point_in_polygon(x, y, polygon):
+    """
+    Determines if a point is inside a polygon using the ray casting algorithm.
+    
+    Args:
+        x, y: Coordinates of the point to check
+        polygon: List of (x, y) tuples defining the polygon vertices
+    
+    Returns:
+        True if the point is inside the polygon, False otherwise
+    """
+    n = len(polygon)
+    inside = False
+    
+    p1x, p1y = polygon[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xinters = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    
+    return inside
+
+def get_region_at_point(point_x, point_y, annotations, image_display_info):
+    """
+    Determine which region the gaze point falls into based on the annotations
+    
+    Args:
+        point_x, point_y: Screen coordinates of the gaze point
+        annotations: COCO annotations - either a list of annotations (old format) or a dict with 'annotations' key (new format)
+        image_display_info: Dict with image dimension and position info
+            {
+                'image_width': original width,
+                'image_height': original height,
+                'display_width': display width,
+                'display_height': display height,
+                'display_x': x position on screen,
+                'display_y': y position on screen
+            }
+    
+    Returns:
+        Region name (string) or "Background" if no region found
+    """
+    global CONSOLE_DEBUG
+    
+    if not annotations:
+        return "Background"
+    
+    # First, check if the point is within the displayed image bounds
+    display_x = image_display_info['display_x']
+    display_y = image_display_info['display_y']
+    display_width = image_display_info['display_width']
+    display_height = image_display_info['display_height']
+    
+    # Check if point is outside the display area of the image
+    if (point_x < display_x or point_x >= display_x + display_width or
+        point_y < display_y or point_y >= display_y + display_height):
+        if CONSOLE_DEBUG:
+            print(f"Point ({point_x}, {point_y}) is outside image bounds ({display_x}-{display_x+display_width}, {display_y}-{display_y+display_height})")
+        return "Background"
+    
+    # Convert screen coordinates to image coordinates (relative to image)
+    rel_x = point_x - display_x
+    rel_y = point_y - display_y
+    
+    # Calculate scaling factors between original and displayed image
+    scale_x = image_display_info['image_width'] / display_width
+    scale_y = image_display_info['image_height'] / display_height
+    
+    # Convert to original image coordinates
+    img_x = int(rel_x * scale_x)
+    img_y = int(rel_y * scale_y)
+    
+    if CONSOLE_DEBUG:
+        print(f"Screen point ({point_x}, {point_y}) converted to image point ({img_x}, {img_y})")
+    
+    # Handle different annotation formats
+    annotation_list = []
+    categories = {}
+    
+    # Check the format of annotations and convert to a standard format
+    if isinstance(annotations, dict) and 'annotations' in annotations:
+        # New format - a dict with 'annotations' and 'categories' keys
+        annotation_list = annotations['annotations']
+        # Create a map of category ids to names
+        if 'categories' in annotations:
+            categories = {cat['id']: cat['name'] for cat in annotations['categories']}
+            if CONSOLE_DEBUG:
+                print(f"Found {len(categories)} categories: {categories}")
+    else:
+        # Old format - a list of annotations
+        annotation_list = annotations
+    
+    if CONSOLE_DEBUG:
+        print(f"Checking {len(annotation_list)} annotations")
+    
+    # Store the most specific region found
+    found_region = None
+    found_region_name = None
+    found_region_bbox_area = float('inf')  # Start with infinite area
+    
+    # Check if the point is within any region's bounding box
+    for annotation in annotation_list:
+        # Get bounding box [x, y, width, height]
+        bbox = annotation.get('bbox', [])
+        if len(bbox) >= 4:
+            x, y, width, height = bbox
+            
+            # Skip if it's a Background region - we'll use this as fallback
+            category_id = annotation.get('category_id')
+            if category_id in categories and categories[category_id] == "Background":
+                continue
+            
+            # Check if the point is within this bounding box
+            if (img_x >= x and img_x < x + width and 
+                img_y >= y and img_y < y + height):
+                
+                # Calculate area of the bounding box
+                area = width * height
+                
+                if CONSOLE_DEBUG:
+                    print(f"Point ({img_x}, {img_y}) is inside bbox ({x}, {y}, {width}, {height}) with category_id {category_id}")
+                
+                # Check if this region is more specific (smaller area) than what we've found so far
+                if area < found_region_bbox_area:
+                    found_region = annotation
+                    found_region_bbox_area = area
+                    
+                    # Get the category name
+                    if category_id in categories:
+                        found_region_name = categories[category_id]
+                    else:
+                        found_region_name = f"Category_{category_id}"
+    
+    # If we found a region, return it
+    if found_region_name:
+        if CONSOLE_DEBUG:
+            print(f"Selected most specific region: {found_region_name} with area {found_region_bbox_area}")
+        return found_region_name
+    
+    # If no specific region was found, check for background regions
+    for annotation in annotation_list:
+        # Get bounding box
+        bbox = annotation.get('bbox', [])
+        if len(bbox) >= 4:
+            x, y, width, height = bbox
+            
+            # Only check Background regions now
+            category_id = annotation.get('category_id')
+            is_background = (category_id in categories and categories[category_id] == "Background")
+            
+            if not is_background:
+                continue
+            
+            # Check if the point is within this background
+            if (img_x >= x and img_x < x + width and 
+                img_y >= y and img_y < y + height):
+                
+                if CONSOLE_DEBUG:
+                    print(f"Point ({img_x}, {img_y}) is inside Background bbox ({x}, {y}, {width}, {height})")
+                
+                # Return the category name
+                if category_id in categories:
+                    return categories[category_id]
+                return f"Category_{category_id}"
+    
+    # If no region found, return Background
+    if CONSOLE_DEBUG:
+        print(f"No region found for point ({img_x}, {img_y})")
+    return "Background"
+
+def analyze_gaze_sequence(gaze_points, annotations, image_info, frame_width, frame_height, categories_map):
+    """
+    Analyze the sequence of gaze points to determine viewing order of image regions.
+    
+    Args:
+        gaze_points: List of (x, y, timestamp) tuples for gaze points
+        annotations: Image annotations from COCO JSON file
+        image_info: Image metadata from COCO JSON file
+        frame_width, frame_height: Display frame dimensions
+        categories_map: Mapping of category IDs to category names
+    
+    Returns:
+        Dict with viewing sequence, region order, and time spent on each region
+    """
+    if not gaze_points or not annotations:
+        return {
+            'viewing_sequence': '',
+            'region_order': {},
+            'time_on_region': {}
+        }
+    
+    # Sort gaze points by timestamp
+    sorted_points = sorted(gaze_points, key=lambda p: p[2])
+    
+    # Get image dimensions
+    image_width = image_info.get('width', 1024)
+    image_height = image_info.get('height', 1024)
+    
+    # Use stored image display information if available (fallback to calculating it if not)
+    if hasattr(globals(), 'CURRENT_IMAGE_DISPLAY_INFO') and all(CURRENT_IMAGE_DISPLAY_INFO.values()):
+        image_display_info = CURRENT_IMAGE_DISPLAY_INFO
+    else:
+        # Calculate display dimensions based on maintaining aspect ratio
+        scale = min(frame_width / image_width, frame_height / image_height)
+        display_width = int(image_width * scale)
+        display_height = int(image_height * scale)
+        display_x = (frame_width - display_width) // 2
+        display_y = (frame_height - display_height) // 2
+        
+        # Create image display info dictionary
+        image_display_info = {
+            'image_width': image_width,
+            'image_height': image_height,
+            'display_width': display_width,
+            'display_height': display_height,
+            'display_x': display_x,
+            'display_y': display_y
+        }
+    
+    # Enhance annotations with category mapping if not already part of annotations
+    enhanced_annotations = annotations.copy() if isinstance(annotations, dict) else {'annotations': annotations}
+    
+    # Make sure categories are available in the annotations
+    if 'categories' not in enhanced_annotations and categories_map:
+        enhanced_annotations['categories'] = [{'id': k, 'name': v} for k, v in categories_map.items()]
+        
+    # Initialize tracking variables
+    current_region = None
+    viewing_sequence = []
+    region_start_times = {}
+    region_total_times = {}
+    region_order = {}
+    region_visit_count = {}
+    
+    # Process each gaze point
+    for i, (x, y, timestamp) in enumerate(sorted_points):
+        # Use the new function with proper display information and category mapping
+        region = get_region_at_point(x, y, enhanced_annotations, image_display_info)
+        
+        # Handle region change
+        if region != current_region:
+            # Record the end of the previous region
+            if current_region and current_region in region_start_times:
+                time_spent = timestamp - region_start_times[current_region]
+                region_total_times[current_region] = region_total_times.get(current_region, 0) + time_spent
+            
+            # Start tracking the new region
+            if region:
+                if region not in region_visit_count:
+                    region_visit_count[region] = 1
+                    region_order[region] = len(region_order) + 1
+                else:
+                    region_visit_count[region] += 1
+                
+                region_start_times[region] = timestamp
+                viewing_sequence.append(region)
+            
+            current_region = region
+    
+    # Handle the last region
+    if current_region and current_region in region_start_times and len(sorted_points) > 0:
+        last_timestamp = sorted_points[-1][2]
+        time_spent = last_timestamp - region_start_times[current_region]
+        region_total_times[current_region] = region_total_times.get(current_region, 0) + time_spent
+    
+    # Format the viewing sequence string
+    sequence_str = " -> ".join(viewing_sequence) if viewing_sequence else ""
+    
+    # Create region order strings with multiple visits
+    region_order_str = {}
+    for region, visits in region_visit_count.items():
+        if visits == 1:
+            region_order_str[region] = str(region_order[region])
+        else:
+            # Create comma-separated list of visit orders
+            visit_positions = []
+            current_visit = 0
+            for i, r in enumerate(viewing_sequence):
+                if r == region:
+                    current_visit += 1
+                    visit_positions.append(str(i + 1))
+                    if current_visit >= visits:
+                        break
+            region_order_str[region] = ",".join(visit_positions)
+    
+    return {
+        'viewing_sequence': sequence_str,
+        'region_order': region_order_str,
+        'time_on_region': region_total_times
+    }
+
+def load_annotations_for_category(category):
+    """Load COCO annotations for a category"""
+    annotations_path = os.path.join(CATEGORIES_DIR, category, "train", "_annotations.coco.json")
+    if os.path.exists(annotations_path):
+        try:
+            with open(annotations_path, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"Error loading annotations: {e}")
+    return None
 
 while running:
     # Handle events

@@ -1,0 +1,11 @@
+{
+    "viewing_sequence": "Background -> Unique -> Background -> Unique -> Background -> Unique -> Background -> Unique -> Background -> Unique -> Background",
+    "region_order": {
+        "Background": "1,3,5,7,9,11",
+        "Unique": "2,4,6,8,10"
+    },
+    "time_on_region": {
+        "Background": 1.13096022605896,
+        "Unique": 1.3345215320587158
+    }
+}

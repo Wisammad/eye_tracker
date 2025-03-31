@@ -1,0 +1,15 @@
+{
+    "viewing_sequence": "Background -> Snack -> Logo -> Snack -> Background -> Snack -> Logo -> Background -> Snack -> Slogan",
+    "region_order": {
+        "Background": "1,5,8",
+        "Snack": "2,4,6,9",
+        "Logo": "3,7",
+        "Slogan": "4"
+    },
+    "time_on_region": {
+        "Background": 2.0644962787628174,
+        "Snack": 0.2329726219177246,
+        "Logo": 0.23289704322814941,
+        "Slogan": 0.0
+    }
+}

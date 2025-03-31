@@ -1,0 +1,13 @@
+{
+    "viewing_sequence": "Unique -> Background -> Logo -> Background -> Unique",
+    "region_order": {
+        "Unique": "1,5",
+        "Background": "2,4",
+        "Logo": "3"
+    },
+    "time_on_region": {
+        "Unique": 2.23453426361084,
+        "Background": 0.13194870948791504,
+        "Logo": 0.13368439674377441
+    }
+}

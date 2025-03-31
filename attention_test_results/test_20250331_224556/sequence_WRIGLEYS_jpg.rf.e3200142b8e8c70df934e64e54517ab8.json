@@ -1,0 +1,17 @@
+{
+    "viewing_sequence": "Unique -> Background -> Unique -> Background -> Slogan -> Unique -> Background -> Snack -> Logo -> Background -> Slogan -> Unique -> Background -> Unique",
+    "region_order": {
+        "Unique": "1,3,6,12,14",
+        "Background": "2,4,7,10,13",
+        "Slogan": "5,11",
+        "Snack": "4",
+        "Logo": "5"
+    },
+    "time_on_region": {
+        "Unique": 1.1004202365875244,
+        "Background": 0.5994391441345215,
+        "Slogan": 0.5305938720703125,
+        "Snack": 0.06808900833129883,
+        "Logo": 0.19909095764160156
+    }
+}
