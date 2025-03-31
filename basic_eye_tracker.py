@@ -1098,49 +1098,49 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
+            
+                # Load primary gaze thresholds
+                GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
+                GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
+                GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
+                VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
+            
+                # Load feature toggles
+                USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
+                USE_SECTOR_CALIBRATION = config.get('use_sector_calibration', USE_SECTOR_CALIBRATION)
                 
-            # Load primary gaze thresholds
-            GAZE_H_THRESHOLD = config.get('h_threshold', GAZE_H_THRESHOLD)
-            GAZE_V_THRESHOLD_UP = config.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
-            GAZE_V_THRESHOLD_DOWN = config.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
-            VERTICAL_BIAS = config.get('vertical_bias', VERTICAL_BIAS)
+                # Initialize sector calibration data if enabled
+                if USE_SECTOR_CALIBRATION:
+                    # Initialize the data structure if it doesn't exist
+                    if not SECTOR_CALIBRATION_DATA:
+                        initialize_sector_calibration()
+                    
+                    # Load sector-specific calibration data if available
+                    if 'sector_data' in config:
+                        for sector, data in config['sector_data'].items():
+                            if sector in SECTOR_CALIBRATION_DATA:
+                                SECTOR_CALIBRATION_DATA[sector].update(data)
+                                
+                                # Ensure we have all required fields
+                                if 'samples_count' not in SECTOR_CALIBRATION_DATA[sector]:
+                                    SECTOR_CALIBRATION_DATA[sector]['samples_count'] = 0
             
-            # Load feature toggles
-            USE_ALTERNATIVE_METHOD = config.get('use_alternative_method', USE_ALTERNATIVE_METHOD)
-            USE_SECTOR_CALIBRATION = config.get('use_sector_calibration', USE_SECTOR_CALIBRATION)
-            
-            # Initialize sector calibration data if enabled
-            if USE_SECTOR_CALIBRATION:
-                # Initialize the data structure if it doesn't exist
-                if not SECTOR_CALIBRATION_DATA:
-                    initialize_sector_calibration()
+                # Print loaded calibration data for debugging
+                print("\nLoaded sector calibration data:")
+                for sector, data in SECTOR_CALIBRATION_DATA.items():
+                    h_threshold = data.get('h_threshold', GAZE_H_THRESHOLD)
+                    v_threshold_up = data.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
+                    v_threshold_down = data.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
+                    vert_bias = data.get('vertical_bias', VERTICAL_BIAS)
+                    samples = data.get('samples_count', 0)
+                    print(f"  {sector}: H={h_threshold:.4f}, V-Up={v_threshold_up:.4f}, V-Down={v_threshold_down:.4f}, Bias={vert_bias:.4f}, Samples={samples}")
                 
-                # Load sector-specific calibration data if available
-                if 'sector_data' in config:
-                    for sector, data in config['sector_data'].items():
-                        if sector in SECTOR_CALIBRATION_DATA:
-                            SECTOR_CALIBRATION_DATA[sector].update(data)
-                            
-                            # Ensure we have all required fields
-                            if 'samples_count' not in SECTOR_CALIBRATION_DATA[sector]:
-                                SECTOR_CALIBRATION_DATA[sector]['samples_count'] = 0
+                # Initialize calibration data for the prediction system
+                initialize_calibration_for_prediction()
+                
+                print("Configuration loaded from " + CONFIG_FILE)
+                return True
             
-            # Print loaded calibration data for debugging
-            print("\nLoaded sector calibration data:")
-            for sector, data in SECTOR_CALIBRATION_DATA.items():
-                h_threshold = data.get('h_threshold', GAZE_H_THRESHOLD)
-                v_threshold_up = data.get('v_threshold_up', GAZE_V_THRESHOLD_UP)
-                v_threshold_down = data.get('v_threshold_down', GAZE_V_THRESHOLD_DOWN)
-                vert_bias = data.get('vertical_bias', VERTICAL_BIAS)
-                samples = data.get('samples_count', 0)
-                print(f"  {sector}: H={h_threshold:.4f}, V-Up={v_threshold_up:.4f}, V-Down={v_threshold_down:.4f}, Bias={vert_bias:.4f}, Samples={samples}")
-            
-            # Initialize calibration data for the prediction system
-            initialize_calibration_for_prediction()
-            
-            print("Configuration loaded from " + CONFIG_FILE)
-            return True
-        
         except Exception as e:
             print(f"Error loading configuration: {e}")
     
@@ -2098,10 +2098,10 @@ def process_frame(frame):
                         sector_status = "Sector calib: Not available for this position"
                         cv2.putText(frame, sector_status, (10, 310), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 1)
-                
-                # Visualize blink status
-                blink_status = "Blinking" if is_blinking else "Eyes Open"
-                cv2.putText(frame, blink_status, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Visualize blink status
+            blink_status = "Blinking" if is_blinking else "Eyes Open"
+            cv2.putText(frame, blink_status, (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
             # Handle eye tracking features regardless of debug mode
             # Calculate average pupil position for gaze visualization
@@ -2233,9 +2233,212 @@ def process_frame(frame):
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         
         elif ATTENTION_TEST_STATE == "TESTING":
-            # Rest of attention test code
-            # This continues with the existing code...
-            pass
+            # Display the current test image if available
+            if CURRENT_TEST_IMAGE is not None:
+                # Calculate elapsed time
+                time_elapsed = time.time() - CURRENT_TEST_IMAGE_START_TIME
+                
+                # Display test image
+                test_img = CURRENT_TEST_IMAGE.copy()
+                
+                # Resize test image to fit the frame while maintaining aspect ratio
+                test_h, test_w = test_img.shape[:2]
+                scale = min(w / test_w, h / test_h)
+                new_w = int(test_w * scale)
+                new_h = int(test_h * scale)
+                
+                # Resize the test image
+                test_img_resized = cv2.resize(test_img, (new_w, new_h))
+                
+                # Calculate position to center the image
+                x_offset = (w - new_w) // 2
+                y_offset = (h - new_h) // 2
+                
+                # Create a blank canvas
+                canvas = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Place the resized image on the canvas
+                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = test_img_resized
+                
+                # Record gaze data if face is detected and draw real-time gaze visualization
+                if results and results.multi_face_landmarks and not is_blinking:
+                    face_landmarks = results.multi_face_landmarks[0]
+                    # Estimate gaze direction
+                    h_direction, v_direction, iris_rel_x, iris_rel_y = estimate_gaze(face_landmarks, w, h)
+                    
+                    # CRITICAL FIX: Use the same predicted_gaze_x and predicted_gaze_y that were calculated by estimate_gaze
+                    # instead of recalculating different coordinates for the attention test
+                    
+                    # Only proceed if we have valid predicted coordinates
+                    if predicted_gaze_x is not None and predicted_gaze_y is not None:
+                        # Process gaze for heatmap using the same coordinates used for the cursor
+                        success = process_gaze_for_heatmap(predicted_gaze_x / w, predicted_gaze_y / h, w, h)
+                        if CONSOLE_DEBUG and success:
+                            print(f"Gaze point added at ({predicted_gaze_x}, {predicted_gaze_y})")
+                        
+                        # Draw debug info for the current state
+                        if DEBUG_MODE:
+                            cv2.putText(canvas, f"Sector: {current_sector}", (10, h - 80), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            cv2.putText(canvas, f"Raw: ({iris_rel_x:.2f}, {iris_rel_y:.2f})", (10, h - 60), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            
+                            # Show relative screen position (0-1 range)
+                            rel_screen_x = predicted_gaze_x / w
+                            rel_screen_y = predicted_gaze_y / h
+                            cv2.putText(canvas, f"Rel: ({rel_screen_x:.2f}, {rel_screen_y:.2f})", (10, h - 40), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            
+                            # Show screen coordinates
+                            cv2.putText(canvas, f"Screen: ({predicted_gaze_x}, {predicted_gaze_y})", (10, h - 20), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        
+                        # Always draw the crosshair cursor
+                        cursor_color = (0, 255, 255)  # Cyan color for all cursor positions
+                        
+                        # Draw crosshair
+                        cv2.line(canvas, (predicted_gaze_x - 15, predicted_gaze_y), (predicted_gaze_x + 15, predicted_gaze_y), cursor_color, 2)  # Horizontal
+                        cv2.line(canvas, (predicted_gaze_x, predicted_gaze_y - 15), (predicted_gaze_x, predicted_gaze_y + 15), cursor_color, 2)  # Vertical
+                        
+                        # Pulsing circle
+                        pulse_size = 5 + int(5 * math.sin(time.time() * 5))  # Pulsing size between 5-10 pixels
+                        cv2.circle(canvas, (predicted_gaze_x, predicted_gaze_y), pulse_size, (0, 0, 255), -1)  # Filled red circle
+                        cv2.circle(canvas, (predicted_gaze_x, predicted_gaze_y), pulse_size + 5, cursor_color, 2)  # Cyan outline
+                        
+                        # Show a live mini-heatmap in the corner for immediate feedback
+                        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                        if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
+                            # Create a mini heatmap visualization for the entire screen
+                            mini_heatmap_size = 200
+                            mini_heatmap = np.zeros((h, w), dtype=np.float32)
+                            
+                            # Add gaussians for each gaze point
+                            for point_x, point_y in ATTENTION_HEATMAP_DATA[image_name]:
+                                # Ensure coordinates are within screen bounds
+                                if 0 <= point_x < w and 0 <= point_y < h:
+                                    # Create small gaussian around point
+                                    x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
+                                    y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
+                                    
+                                    for y in y_coords:
+                                        for x in x_coords:
+                                            dist_sq = (x-point_x)**2 + (y-point_y)**2
+                                            # Add bounds checking before accessing mini_heatmap
+                                            if 0 <= y < h and 0 <= x < w:
+                                                mini_heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
+                            
+                            # Normalize and colorize the heatmap
+                            if mini_heatmap.max() > 0:
+                                mini_heatmap = mini_heatmap / mini_heatmap.max()
+                            
+                            mini_heatmap_colored = cv2.applyColorMap((mini_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                            
+                            # Resize mini heatmap
+                            mini_heatmap_h, mini_heatmap_w = mini_heatmap_colored.shape[:2]
+                            mini_scale = min(mini_heatmap_size / mini_heatmap_w, mini_heatmap_size / mini_heatmap_h)
+                            mini_new_w = int(mini_heatmap_w * mini_scale)
+                            mini_new_h = int(mini_heatmap_h * mini_scale)
+                            mini_heatmap_resized = cv2.resize(mini_heatmap_colored, (mini_new_w, mini_new_h))
+                            
+                            # Draw mini heatmap in corner with label
+                            cv2.putText(canvas, f"Live Attention Map ({len(ATTENTION_HEATMAP_DATA[image_name])} points)", 
+                                       (w - mini_new_w - 10, 20), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                            
+                            # Draw border around mini heatmap
+                            cv2.rectangle(canvas, (w - mini_new_w - 10, 30), (w - 10, 30 + mini_new_h), (255, 255, 255), 1)
+                            
+                            # Place mini heatmap on canvas
+                            canvas[30:30+mini_new_h, w-mini_new_w-10:w-10] = mini_heatmap_resized
+                
+                # Blend the canvas with the frame
+                frame = canvas
+                
+                # Draw progress bar at the top
+                progress = min(1.0, time_elapsed / TEST_IMAGE_DURATION)
+                bar_width = int(w * progress)
+                cv2.rectangle(frame, (0, 0), (bar_width, 10), (0, 255, 0), -1)
+                
+                # Show category and image info
+                category = ATTENTION_CATEGORIES[CURRENT_CATEGORY_INDEX]
+                image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                info_text = f"Category: {category} - Image: {CURRENT_IMAGE_INDEX+1}/{len(ATTENTION_TEST_IMAGES)}"
+                cv2.putText(frame, info_text, (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                # Check if it's time to move to the next image
+                if time_elapsed >= TEST_IMAGE_DURATION:
+                    # Generate and show heatmap for the current image before moving on
+                    if CURRENT_TEST_IMAGE_PATH:
+                        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                        if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
+                            heatmap = generate_heatmap(CURRENT_TEST_IMAGE_PATH, ATTENTION_HEATMAP_DATA[image_name])
+                            if heatmap is not None:
+                                ATTENTION_TEST_STATE = "SHOWING_HEATMAP"
+                                global CURRENT_HEATMAP, CURRENT_HEATMAP_START_TIME
+                                CURRENT_HEATMAP = heatmap
+                                CURRENT_HEATMAP_START_TIME = time.time()
+                                return frame
+                    
+                    move_to_next_test_image()
+        
+        elif ATTENTION_TEST_STATE == "SHOWING_HEATMAP":
+            # Display the heatmap for a few seconds
+            time_elapsed = time.time() - CURRENT_HEATMAP_START_TIME
+            
+            if time_elapsed < 3.0:  # Show heatmap for 3 seconds
+                # Resize heatmap to fit the frame while maintaining aspect ratio
+                heatmap_h, heatmap_w = CURRENT_HEATMAP.shape[:2]
+                scale = min(w / heatmap_w, h / heatmap_h)
+                new_w = int(heatmap_w * scale)
+                new_h = int(heatmap_h * scale)
+                heatmap_resized = cv2.resize(CURRENT_HEATMAP, (new_w, new_h))
+                
+                # Calculate position to center the image
+                x_offset = (w - new_w) // 2
+                y_offset = (h - new_h) // 2
+                
+                # Create a blank canvas
+                canvas = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Place the resized heatmap on the canvas
+                canvas[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = heatmap_resized
+                
+                # Show title
+                cv2.putText(canvas, "Attention Heatmap", (w//2 - 150, 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                frame = canvas
+            else:
+                # After showing the heatmap, continue with next image
+                ATTENTION_TEST_STATE = "TESTING"
+                move_to_next_test_image()
+        
+        elif ATTENTION_TEST_STATE == "RESULTS":
+            # Show test results with option to restart or exit
+            results_text = "Attention Test Completed!"
+            cv2.putText(frame, results_text, (w//2 - 200, h//2 - 100), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 2)
+            
+            # Show summary of results
+            if "summary" in ATTENTION_TEST_RESULTS:
+                summary = ATTENTION_TEST_RESULTS["summary"]
+                cv2.putText(frame, f"Category: {summary['category_tested']}", (w//2 - 150, h//2 - 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, f"Total Images: {summary['total_images_tested']}", (w//2 - 150, h//2), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, f"Total Gaze Points: {summary['total_gaze_points']}", (w//2 - 150, h//2 + 40), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, f"Results saved to: {ATTENTION_TEST_RESULTS['results_dir']}", (w//2 - 300, h//2 + 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Instructions for next actions
+            cv2.putText(frame, "Press 'R' to restart test or 'A' to exit test mode", (w//2 - 300, h//2 + 160), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        
+        # Add instruction to exit attention test mode
+        cv2.putText(frame, "Press 'A' to exit attention test mode", (w//2 - 200, h - 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     return frame
 
@@ -2501,16 +2704,17 @@ def load_next_test_image():
             CURRENT_TEST_IMAGE = img
             CURRENT_TEST_IMAGE_PATH = image_path
             CURRENT_TEST_IMAGE_START_TIME = time.time()
-            print(f"Loaded test image: {os.path.basename(image_path)}")
+            print(f"Loaded test image: {os.path.basename(image_path)} ({CURRENT_IMAGE_INDEX+1}/{len(ATTENTION_TEST_IMAGES)})")
             return True
         else:
             print(f"Failed to load image: {image_path}")
             CURRENT_IMAGE_INDEX += 1
             return load_next_test_image()  # Try the next image
     else:
-        # All images in this category have been tested
+        # All images in the selected category have been tested
+        # End the test and show results
         ATTENTION_TEST_STATE = "RESULTS"
-        print("Completed testing all images in this category")
+        print("Completed testing all images in the selected category")
         generate_and_save_heatmaps()
         return False
 
@@ -2529,35 +2733,24 @@ def start_attention_test():
     ATTENTION_HEATMAP_DATA = {}
     CURRENT_CATEGORY_INDEX = 0
     ATTENTION_TEST_MODE = True
-    ATTENTION_TEST_STATE = "CATEGORY_SELECTION"  # Start with category selection instead of waiting
-    
-    print("Starting attention test - Select a category")
+    ATTENTION_TEST_STATE = "CATEGORY_SELECTION"  # Start with category selection
+    print("Starting attention test - please select a category")
     return True
 
 def move_to_next_test_image():
     """Move to the next image in the attention test"""
-    global CURRENT_IMAGE_INDEX, CURRENT_CATEGORY_INDEX
+    global CURRENT_IMAGE_INDEX, ATTENTION_TEST_STATE
     
     # Move to next image
     CURRENT_IMAGE_INDEX += 1
     
     # Check if we've gone through all images in current category
     if CURRENT_IMAGE_INDEX >= len(ATTENTION_TEST_IMAGES):
-        # Move to next category
-        CURRENT_CATEGORY_INDEX += 1
-        
-        # Check if we've gone through all categories
-        if CURRENT_CATEGORY_INDEX >= len(ATTENTION_CATEGORIES):
-            # Test completed
-            ATTENTION_TEST_STATE = "RESULTS"
-            generate_and_save_heatmaps()
-            return False
-        else:
-            # Load next category
-            if load_category_images(CURRENT_CATEGORY_INDEX):
-                return load_next_test_image()
-            else:
-                return False
+        # End the test as all images in the selected category have been viewed
+        ATTENTION_TEST_STATE = "RESULTS"
+        print("Completed testing all images in the selected category")
+        generate_and_save_heatmaps()
+        return False
     else:
         # Load next image in current category
         return load_next_test_image()
@@ -2642,6 +2835,9 @@ def generate_and_save_heatmaps():
     
     print(f"Generating and saving heatmaps to {results_dir}")
     
+    # Get current category name
+    current_category = ATTENTION_CATEGORIES[CURRENT_CATEGORY_INDEX] if CURRENT_CATEGORY_INDEX < len(ATTENTION_CATEGORIES) else "Unknown"
+    
     # Generate heatmap for each image
     for image_name, gaze_points in ATTENTION_HEATMAP_DATA.items():
         if not gaze_points:
@@ -2650,12 +2846,10 @@ def generate_and_save_heatmaps():
         
         # Find original image path
         original_path = None
-        for category in ATTENTION_CATEGORIES:
-            train_dir = os.path.join(CATEGORIES_DIR, category, "train")
-            potential_path = os.path.join(train_dir, image_name)
-            if os.path.exists(potential_path):
-                original_path = potential_path
-                break
+        train_dir = os.path.join(CATEGORIES_DIR, current_category, "train")
+        potential_path = os.path.join(train_dir, image_name)
+        if os.path.exists(potential_path):
+            original_path = potential_path
         
         if original_path:
             # Generate heatmap
@@ -2681,8 +2875,7 @@ def generate_and_save_heatmaps():
     summary_path = os.path.join(results_dir, "summary.json")
     summary = {
         "test_time": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        "categories_tested": ATTENTION_CATEGORIES,
-        "images_per_category": {cat: len([img for img in ATTENTION_TEST_IMAGES if cat in img]) for cat in ATTENTION_CATEGORIES},
+        "category_tested": current_category,
         "total_images_tested": len(ATTENTION_HEATMAP_DATA),
         "total_gaze_points": sum(len(points) for points in ATTENTION_HEATMAP_DATA.values())
     }
@@ -2705,6 +2898,7 @@ def select_category(index):
         CURRENT_CATEGORY_INDEX = index
         if load_category_images(CURRENT_CATEGORY_INDEX):
             ATTENTION_TEST_STATE = "TESTING"
+            # Load the first image to start testing
             load_next_test_image()
             return True
     return False
