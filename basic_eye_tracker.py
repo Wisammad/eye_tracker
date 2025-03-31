@@ -2228,113 +2228,90 @@ def process_frame(frame):
                     # Estimate gaze direction
                     h_direction, v_direction, iris_rel_x, iris_rel_y = estimate_gaze(face_landmarks, w, h)
                     
-                    # Print debug info to help diagnose the issue
-                    if CONSOLE_DEBUG:
-                        print(f"Raw gaze: ({iris_rel_x:.3f}, {iris_rel_y:.3f}) h_dir: {h_direction}, v_dir: {v_direction}")
+                    # CRITICAL FIX: Use the same predicted_gaze_x and predicted_gaze_y that were calculated by estimate_gaze
+                    # instead of recalculating different coordinates for the attention test
                     
-                    # Convert from -1,1 range to 0,1 range for screen coordinates
-                    scaled_x = (iris_rel_x + 1) / 2
-                    scaled_y = (iris_rel_y + 1) / 2
-                    
-                    # CRITICAL FIX: Reverse the vertical bias effect that pushes everything down
-                    # Get the current sector for sector-specific adjustments
-                    current_sector = determine_current_sector(iris_rel_x, iris_rel_y)
-                    
-                    # Apply vertical correction based on the sector's calibration
-                    if USE_SECTOR_CALIBRATION and current_sector in SECTOR_CALIBRATION_DATA:
-                        sector_data = SECTOR_CALIBRATION_DATA[current_sector]
-                        # The bias is usually negative and pulls downward - we need to counteract it
-                        vertical_bias = sector_data.get('vertical_bias', VERTICAL_BIAS)
+                    # Only proceed if we have valid predicted coordinates
+                    if predicted_gaze_x is not None and predicted_gaze_y is not None:
+                        # Process gaze for heatmap using the same coordinates used for the cursor
+                        success = process_gaze_for_heatmap(predicted_gaze_x / w, predicted_gaze_y / h, w, h)
+                        if CONSOLE_DEBUG and success:
+                            print(f"Gaze point added at ({predicted_gaze_x}, {predicted_gaze_y})")
                         
-                        # Apply a correction factor to compensate for the downward bias
-                        # This is the key fix to prevent the cursor from staying stuck at the bottom
-                        correction_factor = 0.5  # Adjust this if needed (0.5 means counteract half the bias)
-                        scaled_y = max(0.1, min(0.9, scaled_y + vertical_bias * correction_factor))
+                        # Draw debug info for the current state
+                        if DEBUG_MODE:
+                            cv2.putText(canvas, f"Sector: {current_sector}", (10, h - 80), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            cv2.putText(canvas, f"Raw: ({iris_rel_x:.2f}, {iris_rel_y:.2f})", (10, h - 60), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            
+                            # Show relative screen position (0-1 range)
+                            rel_screen_x = predicted_gaze_x / w
+                            rel_screen_y = predicted_gaze_y / h
+                            cv2.putText(canvas, f"Rel: ({rel_screen_x:.2f}, {rel_screen_y:.2f})", (10, h - 40), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                            
+                            # Show screen coordinates
+                            cv2.putText(canvas, f"Screen: ({predicted_gaze_x}, {predicted_gaze_y})", (10, h - 20), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                         
-                        if CONSOLE_DEBUG:
-                            print(f"Applied bias correction: {vertical_bias:.3f} with factor {correction_factor}")
-                            print(f"Adjusted scaled_y: {scaled_y:.3f}")
-                    
-                    # Calculate pixel coordinates on the displayed image
-                    gaze_x = int(x_offset + scaled_x * new_w)
-                    gaze_y = int(y_offset + scaled_y * new_h)
-                    
-                    # Process gaze for heatmap
-                    success = process_gaze_for_heatmap(gaze_x / w, gaze_y / h, w, h)
-                    if CONSOLE_DEBUG and success:
-                        print(f"Gaze point added at ({gaze_x}, {gaze_y})")
-                    
-                    # Draw debug info for the current state
-                    if DEBUG_MODE:
-                        cv2.putText(canvas, f"Sector: {current_sector}", (10, h - 80), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                        cv2.putText(canvas, f"Raw: ({iris_rel_x:.2f}, {iris_rel_y:.2f})", (10, h - 60), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                        cv2.putText(canvas, f"Norm: ({scaled_x:.2f}, {scaled_y:.2f})", (10, h - 40), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        # Always draw the crosshair cursor
+                        cursor_color = (0, 255, 255)  # Cyan color for all cursor positions
                         
-                        # Show screen coordinates
-                        cv2.putText(canvas, f"Screen: ({gaze_x}, {gaze_y})", (10, h - 20), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    
-                    # Always draw the crosshair cursor
-                    # Create more visible crosshair cursor with different color based on validity
-                    cursor_color = (0, 255, 255)  # Cyan color for all cursor positions
-                    
-                    # Draw crosshair
-                    cv2.line(canvas, (gaze_x - 15, gaze_y), (gaze_x + 15, gaze_y), cursor_color, 2)  # Horizontal
-                    cv2.line(canvas, (gaze_x, gaze_y - 15), (gaze_x, gaze_y + 15), cursor_color, 2)  # Vertical
-                    
-                    # Pulsing circle
-                    pulse_size = 5 + int(5 * math.sin(time.time() * 5))  # Pulsing size between 5-10 pixels
-                    cv2.circle(canvas, (gaze_x, gaze_y), pulse_size, (0, 0, 255), -1)  # Filled red circle
-                    cv2.circle(canvas, (gaze_x, gaze_y), pulse_size + 5, cursor_color, 2)  # Cyan outline
-                    
-                    # Show a live mini-heatmap in the corner for immediate feedback
-                    image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
-                    if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
-                        # Create a mini heatmap visualization for the entire screen
-                        mini_heatmap_size = 200
-                        mini_heatmap = np.zeros((h, w), dtype=np.float32)
+                        # Draw crosshair
+                        cv2.line(canvas, (predicted_gaze_x - 15, predicted_gaze_y), (predicted_gaze_x + 15, predicted_gaze_y), cursor_color, 2)  # Horizontal
+                        cv2.line(canvas, (predicted_gaze_x, predicted_gaze_y - 15), (predicted_gaze_x, predicted_gaze_y + 15), cursor_color, 2)  # Vertical
                         
-                        # Add gaussians for each gaze point
-                        for point_x, point_y in ATTENTION_HEATMAP_DATA[image_name]:
-                            # Ensure coordinates are within screen bounds
-                            if 0 <= point_x < w and 0 <= point_y < h:
-                                # Create small gaussian around point
-                                x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
-                                y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
-                                
-                                for y in y_coords:
-                                    for x in x_coords:
-                                        dist_sq = (x-point_x)**2 + (y-point_y)**2
-                                        # Add bounds checking before accessing mini_heatmap
-                                        if 0 <= y < h and 0 <= x < w:
-                                            mini_heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
+                        # Pulsing circle
+                        pulse_size = 5 + int(5 * math.sin(time.time() * 5))  # Pulsing size between 5-10 pixels
+                        cv2.circle(canvas, (predicted_gaze_x, predicted_gaze_y), pulse_size, (0, 0, 255), -1)  # Filled red circle
+                        cv2.circle(canvas, (predicted_gaze_x, predicted_gaze_y), pulse_size + 5, cursor_color, 2)  # Cyan outline
                         
-                        # Normalize and colorize the heatmap
-                        if mini_heatmap.max() > 0:
-                            mini_heatmap = mini_heatmap / mini_heatmap.max()
-                        
-                        mini_heatmap_colored = cv2.applyColorMap((mini_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
-                        
-                        # Resize mini heatmap
-                        mini_heatmap_h, mini_heatmap_w = mini_heatmap_colored.shape[:2]
-                        mini_scale = min(mini_heatmap_size / mini_heatmap_w, mini_heatmap_size / mini_heatmap_h)
-                        mini_new_w = int(mini_heatmap_w * mini_scale)
-                        mini_new_h = int(mini_heatmap_h * mini_scale)
-                        mini_heatmap_resized = cv2.resize(mini_heatmap_colored, (mini_new_w, mini_new_h))
-                        
-                        # Draw mini heatmap in corner with label
-                        cv2.putText(canvas, f"Live Attention Map ({len(ATTENTION_HEATMAP_DATA[image_name])} points)", 
-                                   (w - mini_new_w - 10, 20), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                        
-                        # Draw border around mini heatmap
-                        cv2.rectangle(canvas, (w - mini_new_w - 10, 30), (w - 10, 30 + mini_new_h), (255, 255, 255), 1)
-                        
-                        # Place mini heatmap on canvas
-                        canvas[30:30+mini_new_h, w-mini_new_w-10:w-10] = mini_heatmap_resized
+                        # Show a live mini-heatmap in the corner for immediate feedback
+                        image_name = os.path.basename(CURRENT_TEST_IMAGE_PATH)
+                        if image_name in ATTENTION_HEATMAP_DATA and len(ATTENTION_HEATMAP_DATA[image_name]) > 0:
+                            # Create a mini heatmap visualization for the entire screen
+                            mini_heatmap_size = 200
+                            mini_heatmap = np.zeros((h, w), dtype=np.float32)
+                            
+                            # Add gaussians for each gaze point
+                            for point_x, point_y in ATTENTION_HEATMAP_DATA[image_name]:
+                                # Ensure coordinates are within screen bounds
+                                if 0 <= point_x < w and 0 <= point_y < h:
+                                    # Create small gaussian around point
+                                    x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
+                                    y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
+                                    
+                                    for y in y_coords:
+                                        for x in x_coords:
+                                            dist_sq = (x-point_x)**2 + (y-point_y)**2
+                                            # Add bounds checking before accessing mini_heatmap
+                                            if 0 <= y < h and 0 <= x < w:
+                                                mini_heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
+                            
+                            # Normalize and colorize the heatmap
+                            if mini_heatmap.max() > 0:
+                                mini_heatmap = mini_heatmap / mini_heatmap.max()
+                            
+                            mini_heatmap_colored = cv2.applyColorMap((mini_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                            
+                            # Resize mini heatmap
+                            mini_heatmap_h, mini_heatmap_w = mini_heatmap_colored.shape[:2]
+                            mini_scale = min(mini_heatmap_size / mini_heatmap_w, mini_heatmap_size / mini_heatmap_h)
+                            mini_new_w = int(mini_heatmap_w * mini_scale)
+                            mini_new_h = int(mini_heatmap_h * mini_scale)
+                            mini_heatmap_resized = cv2.resize(mini_heatmap_colored, (mini_new_w, mini_new_h))
+                            
+                            # Draw mini heatmap in corner with label
+                            cv2.putText(canvas, f"Live Attention Map ({len(ATTENTION_HEATMAP_DATA[image_name])} points)", 
+                                       (w - mini_new_w - 10, 20), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                            
+                            # Draw border around mini heatmap
+                            cv2.rectangle(canvas, (w - mini_new_w - 10, 30), (w - 10, 30 + mini_new_h), (255, 255, 255), 1)
+                            
+                            # Place mini heatmap on canvas
+                            canvas[30:30+mini_new_h, w-mini_new_w-10:w-10] = mini_heatmap_resized
                 
                 # Blend the canvas with the frame
                 frame = canvas
@@ -2422,6 +2399,96 @@ def process_frame(frame):
         # Add instruction to exit attention test mode
         cv2.putText(frame, "Press 'A' to exit attention test mode", (w//2 - 200, h - 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
+    # After all other drawing, add visualization for debugging
+    if results and results.multi_face_landmarks and not is_blinking and not CALIBRATION_MODE and not ATTENTION_TEST_MODE:
+        face_landmarks = results.multi_face_landmarks[0]
+        
+        # CRITICAL FIX: Use the same predicted gaze coordinates for both the cursor and heatmap
+        # Instead of calculating new coordinates, use the existing predicted_gaze_x and predicted_gaze_y
+        # that were already calculated by estimate_gaze()
+        
+        # Only proceed if we have valid predicted coordinates
+        if predicted_gaze_x is not None and predicted_gaze_y is not None:
+            # Store gaze points for live heatmap
+            global LIVE_DEBUG_HEATMAP_POINTS
+            if 'LIVE_DEBUG_HEATMAP_POINTS' not in globals():
+                LIVE_DEBUG_HEATMAP_POINTS = []
+                
+            # Store up to 100 recent gaze points
+            LIVE_DEBUG_HEATMAP_POINTS.append((predicted_gaze_x, predicted_gaze_y))
+            if len(LIVE_DEBUG_HEATMAP_POINTS) > 100:
+                LIVE_DEBUG_HEATMAP_POINTS.pop(0)
+                
+            # Create a live heatmap visualization for the entire screen
+            heatmap = np.zeros((h, w), dtype=np.float32)
+            
+            # Add gaussians for each stored gaze point
+            for point_x, point_y in LIVE_DEBUG_HEATMAP_POINTS:
+                # Ensure coordinates are within screen bounds
+                if 0 <= point_x < w and 0 <= point_y < h:
+                    # Create small gaussian around point
+                    x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
+                    y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
+                    
+                    for y in y_coords:
+                        for x in x_coords:
+                            dist_sq = (x-point_x)**2 + (y-point_y)**2
+                            if 0 <= y < h and 0 <= x < w:
+                                heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
+            
+            # Normalize and colorize the heatmap
+            if heatmap.max() > 0:
+                heatmap = heatmap / heatmap.max()
+                
+            heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
+            
+            # Create a semi-transparent overlay with the heatmap
+            heatmap_overlay = frame.copy()
+            for y in range(h):
+                for x in range(w):
+                    if heatmap[y, x] > 0.1:  # Only show significant values
+                        b, g, r = heatmap_colored[y, x]
+                        alpha = min(0.7, heatmap[y, x])  # Use heatmap value as alpha, max 0.7 opacity
+                        # Blend the colors
+                        heatmap_overlay[y, x] = [
+                            int(b * alpha + frame[y, x, 0] * (1 - alpha)),
+                            int(g * alpha + frame[y, x, 1] * (1 - alpha)),
+                            int(r * alpha + frame[y, x, 2] * (1 - alpha))
+                        ]
+            
+            frame = heatmap_overlay
+            
+            # Draw crosshair cursor at current gaze point (matching what's shown elsewhere)
+            cursor_color = (0, 255, 255)  # Cyan
+            cv2.line(frame, (predicted_gaze_x - 15, predicted_gaze_y), (predicted_gaze_x + 15, predicted_gaze_y), cursor_color, 2)
+            cv2.line(frame, (predicted_gaze_x, predicted_gaze_y - 15), (predicted_gaze_x, predicted_gaze_y + 15), cursor_color, 2)
+            
+            # Display debug info
+            if DEBUG_MODE:
+                cv2.putText(frame, f"Normal Mode Gaze: ({predicted_gaze_x}, {predicted_gaze_y})", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                # Get direction using simple thresholds instead of the full function
+                h_dir = "Center"
+                v_dir = "Center"
+                if iris_rel_x < -0.1:
+                    h_dir = "Left"
+                elif iris_rel_x > 0.1:
+                    h_dir = "Right"
+                
+                if iris_rel_y < -0.1:
+                    v_dir = "Up"
+                elif iris_rel_y > 0.1:
+                    v_dir = "Down"
+                
+                gaze_text = f"{h_dir}"
+                if v_dir != "Center":
+                    gaze_text = f"{gaze_text}-{v_dir}" if h_dir != "Center" else v_dir
+                    
+                cv2.putText(frame, f"Looking: {gaze_text}", (10, 60), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, f"Sector: {current_sector}", (10, 90), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     
     return frame
 
