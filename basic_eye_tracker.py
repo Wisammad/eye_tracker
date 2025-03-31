@@ -146,18 +146,18 @@ CURRENT_TEST_IMAGE = None           # Currently displayed test image
 CURRENT_TEST_IMAGE_PATH = None      # Path to current test image
 CURRENT_TEST_IMAGE_START_TIME = 0   # When current test image started displaying
 TEST_IMAGE_DURATION = 5             # How long to show each test image in seconds
-ATTENTION_HEATMAP_DATA = {}         # Store gaze points for heatmap generation
+ATTENTION_HEATMAP_DATA = {}         # Store gaze points for heatmap generation (only for image testing)
 ATTENTION_TEST_RESULTS = {}         # Store test results
 ATTENTION_CATEGORIES = []           # List of available categories for testing
 CURRENT_CATEGORY_INDEX = 0          # Current category being tested
 ATTENTION_TEST_STATE = "WAITING"    # WAITING, CATEGORY_SELECTION, TESTING, SHOWING_HEATMAP, RESULTS
 ATTENTION_TEST_IMAGES = []          # List of images for current category
 CURRENT_IMAGE_INDEX = 0             # Current image index in test
-HEATMAP_OPACITY = 0.7               # Heatmap overlay opacity
-GAUSSIAN_SIGMA = 25                 # Gaussian blur sigma for heatmap generation
+HEATMAP_OPACITY = 0.7               # Heatmap overlay opacity (only for image testing)
+GAUSSIAN_SIGMA = 25                 # Gaussian blur sigma for heatmap generation (only for image testing)
 MAX_GAZE_POINTS = 100               # Maximum number of gaze points to store per image
-CURRENT_HEATMAP = None              # Currently displayed heatmap
-CURRENT_HEATMAP_START_TIME = 0      # When the current heatmap started displaying
+CURRENT_HEATMAP = None              # Currently displayed heatmap (only for image testing)
+CURRENT_HEATMAP_START_TIME = 0      # When the current heatmap started displaying (only for image testing)
 
 # Attention test folder paths (these will be populated at runtime)
 CATEGORIES_DIR = "./Categories"
@@ -2404,62 +2404,9 @@ def process_frame(frame):
     if results and results.multi_face_landmarks and not is_blinking and not CALIBRATION_MODE and not ATTENTION_TEST_MODE:
         face_landmarks = results.multi_face_landmarks[0]
         
-        # CRITICAL FIX: Use the same predicted gaze coordinates for both the cursor and heatmap
-        # Instead of calculating new coordinates, use the existing predicted_gaze_x and predicted_gaze_y
-        # that were already calculated by estimate_gaze()
-        
         # Only proceed if we have valid predicted coordinates
         if predicted_gaze_x is not None and predicted_gaze_y is not None:
-            # Store gaze points for live heatmap
-            global LIVE_DEBUG_HEATMAP_POINTS
-            if 'LIVE_DEBUG_HEATMAP_POINTS' not in globals():
-                LIVE_DEBUG_HEATMAP_POINTS = []
-                
-            # Store up to 100 recent gaze points
-            LIVE_DEBUG_HEATMAP_POINTS.append((predicted_gaze_x, predicted_gaze_y))
-            if len(LIVE_DEBUG_HEATMAP_POINTS) > 100:
-                LIVE_DEBUG_HEATMAP_POINTS.pop(0)
-                
-            # Create a live heatmap visualization for the entire screen
-            heatmap = np.zeros((h, w), dtype=np.float32)
-            
-            # Add gaussians for each stored gaze point
-            for point_x, point_y in LIVE_DEBUG_HEATMAP_POINTS:
-                # Ensure coordinates are within screen bounds
-                if 0 <= point_x < w and 0 <= point_y < h:
-                    # Create small gaussian around point
-                    x_coords = np.arange(max(0, point_x-15), min(w, point_x+15))
-                    y_coords = np.arange(max(0, point_y-15), min(h, point_y+15))
-                    
-                    for y in y_coords:
-                        for x in x_coords:
-                            dist_sq = (x-point_x)**2 + (y-point_y)**2
-                            if 0 <= y < h and 0 <= x < w:
-                                heatmap[y, x] += np.exp(-dist_sq / (2 * 10**2))
-            
-            # Normalize and colorize the heatmap
-            if heatmap.max() > 0:
-                heatmap = heatmap / heatmap.max()
-                
-            heatmap_colored = cv2.applyColorMap((heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET)
-            
-            # Create a semi-transparent overlay with the heatmap
-            heatmap_overlay = frame.copy()
-            for y in range(h):
-                for x in range(w):
-                    if heatmap[y, x] > 0.1:  # Only show significant values
-                        b, g, r = heatmap_colored[y, x]
-                        alpha = min(0.7, heatmap[y, x])  # Use heatmap value as alpha, max 0.7 opacity
-                        # Blend the colors
-                        heatmap_overlay[y, x] = [
-                            int(b * alpha + frame[y, x, 0] * (1 - alpha)),
-                            int(g * alpha + frame[y, x, 1] * (1 - alpha)),
-                            int(r * alpha + frame[y, x, 2] * (1 - alpha))
-                        ]
-            
-            frame = heatmap_overlay
-            
-            # Draw crosshair cursor at current gaze point (matching what's shown elsewhere)
+            # Draw crosshair cursor at current gaze point
             cursor_color = (0, 255, 255)  # Cyan
             cv2.line(frame, (predicted_gaze_x - 15, predicted_gaze_y), (predicted_gaze_x + 15, predicted_gaze_y), cursor_color, 2)
             cv2.line(frame, (predicted_gaze_x, predicted_gaze_y - 15), (predicted_gaze_x, predicted_gaze_y + 15), cursor_color, 2)
